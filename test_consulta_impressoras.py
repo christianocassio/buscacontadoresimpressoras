@@ -518,6 +518,7 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertIn("background:#991b1b;color:#fff;font-weight:bold;", tabela)
         self.assertIn("background:#c2410c;color:#fff;font-weight:bold;", tabela)
         self.assertIn("background:#1d4ed8;color:#fff;font-weight:bold;", tabela)
+        self.assertGreaterEqual(tabela.count("white-space:nowrap;background:#1d4ed8"), 20)
 
     def test_csv_inclui_nome_dispositivo_numero_serie_e_contadores_no_inicio(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:

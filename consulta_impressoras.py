@@ -50,7 +50,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -644,7 +644,7 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
     for chave, rotulo in COLUNAS_TABELA_COMPLETA:
         estilo = (
             'border:1px solid #cbd5e1;padding:8px 10px;text-align:left;'
-            'white-space:nowrap;background:#0f4c81;color:#fff;'
+            'white-space:nowrap;background:#1d4ed8;color:#fff;font-weight:bold;'
         )
         if chave == 'total_geral':
             estilo = (
