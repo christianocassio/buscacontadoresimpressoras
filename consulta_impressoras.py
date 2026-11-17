@@ -50,7 +50,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -73,6 +73,17 @@ def tipo_conexao_padrao(nome):
         if not unicodedata.combining(caractere)
     ).casefold()
     return "USB" if "pulmao" in nome_normalizado else "CABO"
+
+
+def filtrar_impressoras_de_rede(lista_impressoras):
+    return [
+        impressora
+        for impressora in lista_impressoras
+        if str(
+            impressora.get("tipo_conexao")
+            or tipo_conexao_padrao(impressora.get("nome", ""))
+        ).strip().upper() != "USB"
+    ]
 
 
 def caminho_recurso(nome):
@@ -249,7 +260,11 @@ def obter_ips_de_rota(lista_impressoras=None):
 
 def verificar_rede_corporativa(faixa_configurada, lista_impressoras=None):
     faixa = ipaddress.ip_network(faixa_configurada, strict=False)
-    ips_locais = obter_ips_de_rota(lista_impressoras)
+    dispositivos = lista_impressoras if lista_impressoras is not None else impressoras
+    dispositivos_rede = filtrar_impressoras_de_rede(dispositivos)
+    if not dispositivos_rede:
+        return [], False
+    ips_locais = obter_ips_de_rota(dispositivos_rede)
     dentro_da_faixa = any(
         ipaddress.ip_address(endereco) in faixa
         for endereco in ips_locais
@@ -1179,6 +1194,7 @@ def abrir_whatsapp(numero, body):
 def consultar_impressoras(progress_callback=None, lista_impressoras=None):
     resultados = []
     dispositivos = lista_impressoras if lista_impressoras is not None else impressoras
+    dispositivos = filtrar_impressoras_de_rede(dispositivos)
     total_impressoras = len(dispositivos)
     for indice, imp in enumerate(dispositivos, start=1):
         nome = imp['nome']
@@ -1960,11 +1976,27 @@ def construir_interface(config, caminho_config):
         justify='left'
     ).grid(row=10, column=0, sticky='w', pady=(7, 0))
 
+    def consulta_sem_impressoras_rede():
+        consultando['ativo'] = False
+        botao_atualizar.config(state='normal')
+        atualizar_progresso(
+            100,
+            'Consulta concluída: nenhuma impressora de rede cadastrada.'
+        )
+        status_var.set(
+            'As impressoras USB permanecem no cadastro, mas não entram na busca de rede.'
+        )
+
     def consulta_em_segundo_plano():
         try:
+            dispositivos_rede = filtrar_impressoras_de_rede(config['impressoras'])
+            if not dispositivos_rede:
+                root.after(0, consulta_sem_impressoras_rede)
+                return
+
             ips_locais, dentro_da_faixa = verificar_rede_corporativa(
                 config['faixa_rede_corporativa'],
-                config['impressoras']
+                dispositivos_rede
             )
             if not dentro_da_faixa:
                 root.after(
@@ -1979,7 +2011,7 @@ def construir_interface(config, caminho_config):
             data_consulta = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             resultados = consultar_impressoras(
                 progress_callback=atualizar_progresso_impressora,
-                lista_impressoras=config['impressoras']
+                lista_impressoras=dispositivos_rede
             )
             root.after(0, lambda: atualizar_progresso(82, 'Montando o relatório...'))
             html_relatorio = gerar_html(

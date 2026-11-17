@@ -101,6 +101,36 @@ class ConsultaImpressorasTests(unittest.TestCase):
                 {**impressora, "tipo_conexao": "BLUETOOTH"}
             ])
 
+    def test_verificacao_de_faixa_ignora_usb_mantida_no_cadastro(self):
+        usb = {
+            "nome": "Pulmão", "ip": "198.51.100.220", "tipo_conexao": "USB"
+        }
+        cabo = {
+            "nome": "Impressora de rede", "ip": "10.0.0.20",
+            "tipo_conexao": "CABO"
+        }
+        with patch.object(
+            app, "obter_ips_de_rota", return_value=["10.0.0.15"]
+        ) as obter_ips:
+            ips, dentro_da_faixa = app.verificar_rede_corporativa(
+                "10.0.0.0/24", [usb, cabo]
+            )
+
+        self.assertEqual(ips, ["10.0.0.15"])
+        self.assertTrue(dentro_da_faixa)
+        obter_ips.assert_called_once_with([cabo])
+
+    def test_verificacao_sem_dispositivos_de_rede_nao_consulta_enderecos(self):
+        with patch.object(app, "obter_ips_de_rota") as obter_ips:
+            ips, dentro_da_faixa = app.verificar_rede_corporativa(
+                "10.0.0.0/24",
+                [{"nome": "Pulmão", "ip": "198.51.100.220", "tipo_conexao": "USB"}]
+            )
+
+        self.assertEqual(ips, [])
+        self.assertFalse(dentro_da_faixa)
+        obter_ips.assert_not_called()
+
     def test_atualiza_numero_de_serie_cadastrado_sem_apagar_valor_existente(self):
         config = {
             "impressoras": [
@@ -239,6 +269,11 @@ class ConsultaImpressorasTests(unittest.TestCase):
                 "host": "PRINTER-02", "ip": "192.0.2.221",
                 "numero_serie": "SN-OFFLINE-2"
             },
+            {
+                "nome": "Pulmão", "setor": "Setor 03",
+                "host": "PRINTER-USB", "ip": "198.51.100.220",
+                "tipo_conexao": "USB"
+            },
         ]
         progresso = []
 
@@ -249,6 +284,8 @@ class ConsultaImpressorasTests(unittest.TestCase):
                 self.content = conteudo.encode("utf-8")
 
         def fake_get(url, **kwargs):
+            if "198.51.100.220" in url:
+                raise AssertionError("USB printer must not be queried over the network")
             if "192.0.2.221" in url:
                 raise requests.ConnectionError("falha simulada")
             if app.CAMINHO_ESTADO in url:
@@ -266,6 +303,7 @@ class ConsultaImpressorasTests(unittest.TestCase):
             )
 
         self.assertEqual(resultados[0]["nome"], "Impressora 01")
+        self.assertEqual(len(resultados), 2)
         self.assertEqual(resultados[0]["setor"], "Setor 01")
         self.assertEqual(resultados[0]["modelo"], "WF-M5899 Series")
         self.assertEqual(resultados[0]["mac"], "02:00:00:00:00:01")

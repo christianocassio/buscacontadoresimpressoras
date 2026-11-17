@@ -10,7 +10,7 @@ Aplicativo para Windows que consulta impressoras Epson na rede, acompanha tinta 
 - Cria rascunho de e-mail `.eml` com a tabela e abre conversas de WhatsApp com mensagem pronta. O envio é manual.
 - Na tabela de alertas, clique diretamente no IP para abrir a página de gestão da impressora no navegador. A tabela destaca falhas de comunicação e alertas de tinta, com rolagem vertical e horizontal.
 - O cadastro de impressoras inclui número de série: ele é extraído na consulta quando disponível, salvo no cadastro e pode ser digitado ou corrigido manualmente. Os identificadores (incluindo número de série, modelo e MAC) ficam agrupados com o IP nos relatórios, no e-mail e no WhatsApp.
-- O cadastro inclui o campo **Tipo Conexão**, com seleção fixa entre USB, CABO e WIFI. Registros existentes e novos usam CABO por padrão; nomes que contenham “Pulmão” sugerem USB. WIFI fica disponível para uso futuro.
+- O cadastro inclui o campo **Tipo Conexão**, com seleção fixa entre USB, CABO e WIFI. Registros existentes e novos usam CABO por padrão; nomes que contenham “Pulmão” sugerem USB. Impressoras USB continuam no cadastro, mas são excluídas da verificação de faixa e da busca de rede, mesmo com IP fora da faixa. WIFI fica disponível para uso futuro.
 - Interface compacta para mostrar os controles em uma tela, mantendo os oito alertas visíveis com rolagem interna. O cabeçalho informa a versão, o horário do executável e o desenvolvedor, e inclui um atalho para Releases.
 
 ## Download
