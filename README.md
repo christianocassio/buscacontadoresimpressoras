@@ -6,7 +6,7 @@ Aplicativo para Windows que consulta impressoras Epson na rede, acompanha tinta 
 
 - Consulta status, consumíveis, identificação técnica, número de série e contadores.
 - Destaca tinta vazia/baixa e falhas de comunicação; nível de papel fica apenas no detalhamento técnico.
-- Gera relatório HTML com resumo, alertas prioritários e tabela final horizontal; também salva CSV. Cabeçalhos e linhas USB usam destaque azul forte, impressoras USB aparecem como não consultadas e alertas de falha e tinta usam cores mais fortes. Os IPs no relatório e no e-mail abrem a página de gestão Epson, os links também seguem no WhatsApp, e o nível de tinta fica junto dos contadores.
+- Gera relatório HTML com resumo, alertas prioritários e tabela final horizontal; também salva CSV. Na tabela completa, MAC, IP e número de série ficam agrupados antes do bloco de contadores, que inclui total de páginas e tinta preta. Cabeçalhos e linhas USB usam destaque azul forte, impressoras USB aparecem como não consultadas e alertas de falha e tinta usam cores mais fortes. Os IPs no relatório e no e-mail abrem a página de gestão Epson, os links também seguem no WhatsApp.
 - Cria rascunho de e-mail `.eml` com a tabela e abre conversas de WhatsApp com mensagem pronta. O envio é manual.
 - Na tabela de alertas, clique diretamente no IP para abrir a página de gestão da impressora no navegador. A tabela destaca falhas de comunicação e alertas de tinta, com rolagem vertical e horizontal.
 - O cadastro de impressoras inclui número de série: ele é extraído na consulta quando disponível, salvo no cadastro e pode ser digitado ou corrigido manualmente. Os identificadores (incluindo número de série, modelo e MAC) ficam agrupados com o IP nos relatórios, no e-mail e no WhatsApp.

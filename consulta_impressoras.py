@@ -50,7 +50,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -601,14 +601,14 @@ def gerar_alertas(resultados, limite_tinta=20):
 COLUNAS_TABELA_COMPLETA = (
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
-    ('ip', 'IP'),
-    ('tipo_conexao', 'Tipo Conexão'),
     ('nome', 'Identificação'),
     ('nome_dispositivo', 'Nome do dispositivo'),
-    ('numero_serie', 'Número de série'),
     ('modelo', 'Modelo'),
-    ('mac', 'MAC'),
     ('firmware', 'Firmware'),
+    ('tipo_conexao', 'Tipo Conexão'),
+    ('mac', 'MAC'),
+    ('ip', 'IP'),
+    ('numero_serie', 'Número de série'),
     ('total_geral', 'Número total de páginas'),
     ('total_pb', 'P&B'),
     ('total_cor', 'Cor'),

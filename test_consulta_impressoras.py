@@ -430,10 +430,13 @@ class ConsultaImpressorasTests(unittest.TestCase):
             self.assertIn(rotulo, corpo)
         self.assertIn('<th scope="col"', corpo)
         self.assertLess(corpo.index("Setor físico"), corpo.index("Hostname"))
-        self.assertLess(corpo.index("Hostname"), corpo.index(">IP<"))
-        self.assertLess(corpo.index(">IP<"), corpo.index(">Nome do dispositivo<"))
-        self.assertLess(corpo.index(">Número de série<"), corpo.index(">MAC<"))
-        self.assertLess(corpo.index(">MAC<"), corpo.index(">Número total de páginas<"))
+        self.assertLess(corpo.index("Hostname"), corpo.index(">Identificação<"))
+        self.assertLess(corpo.index(">MAC<"), corpo.index(">IP<"))
+        self.assertLess(corpo.index(">IP<"), corpo.index(">Número de série<"))
+        self.assertLess(
+            corpo.index(">Número de série<"),
+            corpo.index(">Número total de páginas<"),
+        )
         self.assertLess(corpo.index("Impressão em 1 face"), corpo.index("Tinta preta"))
         self.assertEqual(corpo.count(">Tinta preta<"), 1)
         self.assertIn(">Identificação<", corpo)
@@ -607,6 +610,17 @@ class ConsultaImpressorasTests(unittest.TestCase):
         )
         self.assertIn('class="dados-impressora"', relatorio)
         self.assertIn('<th scope="col"', relatorio)
+        inicio_cabecalho = relatorio.index('<thead>')
+        fim_cabecalho = relatorio.index('</thead>', inicio_cabecalho)
+        cabecalho = relatorio[inicio_cabecalho:fim_cabecalho]
+        colunas_na_ordem = (
+            '>MAC<', '>IP<', '>Número de série<',
+            '>Número total de páginas<', '>P&amp;B<', '>Cor<',
+            '>Impressão em 2 faces<', '>Impressão em 1 face<',
+            '>Tinta preta<',
+        )
+        posicoes_colunas = [cabecalho.index(rotulo) for rotulo in colunas_na_ordem]
+        self.assertEqual(posicoes_colunas, sorted(posicoes_colunas))
         self.assertEqual(relatorio.count('<tr class="linha-impressora">'), 1)
         self.assertIn('overflow-x:auto', relatorio)
         self.assertIn('html { zoom: 75%; }', relatorio)
