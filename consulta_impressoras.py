@@ -50,7 +50,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -602,6 +602,7 @@ COLUNAS_TABELA_COMPLETA = (
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
     ('ip', 'IP'),
+    ('tipo_conexao', 'Tipo Conexão'),
     ('nome', 'Identificação'),
     ('nome_dispositivo', 'Nome do dispositivo'),
     ('numero_serie', 'Número de série'),
@@ -633,7 +634,7 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
     contadores = {'total_pb', 'total_cor', 'total_2faces', 'total_1face'}
     colunas_contadores_destaque = contadores | {'tinta_preto'}
     identificacao = {
-        'setor', 'host', 'ip', 'nome', 'nome_dispositivo',
+        'setor', 'host', 'ip', 'tipo_conexao', 'nome', 'nome_dispositivo',
         'numero_serie', 'modelo', 'mac', 'firmware'
     }
     alertas_por_ip = {
@@ -662,19 +663,27 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
     linhas = []
     for item in resultados:
         status = limpar_texto(item.get('status'))
+        tipo_conexao = str(
+            item.get('tipo_conexao')
+            or tipo_conexao_padrao(item.get('nome', ''))
+        ).strip().upper()
+        is_usb = tipo_conexao == 'USB'
         tipo_alerta = alertas_por_ip.get(limpar_texto(item.get('ip')))
         if tipo_alerta == 'Sem comunicação':
             classe_linha = 'sem-comunicacao'
-            estilo_linha = 'background:#fee2e2;color:#991b1b;'
+            estilo_linha = 'background:#991b1b;color:#fff;font-weight:bold;'
         elif tipo_alerta == 'Tinta vazia':
             classe_linha = 'alerta-tinta-vazia'
-            estilo_linha = 'background:#fecaca;color:#991b1b;'
+            estilo_linha = 'background:#b91c1c;color:#fff;font-weight:bold;'
         elif tipo_alerta == 'Tinta baixa':
             classe_linha = 'alerta-tinta-baixa'
-            estilo_linha = 'background:#ffedd5;color:#9a3412;'
+            estilo_linha = 'background:#c2410c;color:#fff;font-weight:bold;'
         elif status.startswith('Sucesso parcial'):
             classe_linha = 'sucesso-parcial'
-            estilo_linha = 'background:#fef3c7;color:#92400e;'
+            estilo_linha = 'background:#b45309;color:#fff;font-weight:bold;'
+        elif is_usb:
+            classe_linha = 'conexao-usb'
+            estilo_linha = 'background:#1d4ed8;color:#fff;font-weight:bold;'
         else:
             classe_linha = ''
             estilo_linha = ''
@@ -698,12 +707,17 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
             valor = (
                 link_gestao_impressora_html(item.get(chave))
                 if chave == 'ip'
+                else escapar_html(tipo_conexao)
+                if chave == 'tipo_conexao'
                 else escapar_html(item.get(chave))
             )
             celulas.append(f'<td{classe} style="{estilo}">{valor}</td>')
-        classes_linha = ' '.join(
-            classe for classe in ('linha-impressora', classe_linha) if classe
-        )
+        classes = ['linha-impressora']
+        if classe_linha:
+            classes.append(classe_linha)
+        if is_usb and 'conexao-usb' not in classes:
+            classes.append('conexao-usb')
+        classes_linha = ' '.join(classes)
         linhas.append(
             f'<tr class="{classes_linha}">{"".join(celulas)}</tr>'
         )
@@ -721,8 +735,30 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
     )
 
 
-def gerar_html(resultados, data_consulta, limite_tinta=20):
+def gerar_html(
+    resultados, data_consulta, limite_tinta=20, impressoras_usb=None
+):
     alertas = gerar_alertas(resultados, limite_tinta)
+    ips_resultados = {limpar_texto(item.get('ip')) for item in resultados}
+    linhas_usb = []
+    for impressora in impressoras_usb or ():
+        tipo_conexao = str(
+            impressora.get('tipo_conexao')
+            or tipo_conexao_padrao(impressora.get('nome', ''))
+        ).strip().upper()
+        ip = limpar_texto(impressora.get('ip'))
+        if tipo_conexao != 'USB' or ip in ips_resultados:
+            continue
+        linhas_usb.append({
+            'setor': limpar_texto(impressora.get('setor'), 'Não informado'),
+            'host': limpar_texto(impressora.get('host')),
+            'ip': ip,
+            'tipo_conexao': 'USB',
+            'nome': limpar_texto(impressora.get('nome')),
+            'numero_serie': limpar_texto(impressora.get('numero_serie')),
+            'status': 'USB — não consultada (conexão local)',
+        })
+
     equipamentos_ok = sum(item.get('status') == 'Sucesso' for item in resultados)
     equipamentos_parciais = sum(
         item.get('status', '').startswith('Sucesso parcial')
@@ -810,13 +846,13 @@ def gerar_html(resultados, data_consulta, limite_tinta=20):
             <strong>📅 Data da consulta:</strong> {escapar_html(data_consulta)}
             <h2 class=\"resumo-titulo\">Resumo executivo</h2>
             <div class=\"resumo\">
-                <div class=\"chip\"><strong>Total de equipamentos</strong><span>{len(resultados)}</span></div>
+                <div class=\"chip\"><strong>Total de equipamentos</strong><span>{len(resultados) + len(linhas_usb)}</span></div>
                 <div class=\"chip\"><strong>Consultas concluídas</strong><span>{equipamentos_ok}</span></div>
                 <div class=\"chip\"><strong>Consultas parciais</strong><span>{equipamentos_parciais}</span></div>
                 <div class=\"chip\"><strong>Falhas de comunicação</strong><span>{equipamentos_com_falha}</span></div>
                 <div class=\"chip\"><strong>Itens para atenção</strong><span>{len(alertas)}</span></div>
             </div>
-            <p class=\"observacao\">O relatório detalha localização, identificação técnica, estado, insumos e contadores de cada equipamento.</p>
+            <p class=\"observacao\">O relatório detalha os equipamentos consultados; impressoras USB aparecem na tabela como não consultadas.</p>
         </div>
 """
 
@@ -940,8 +976,8 @@ def gerar_html(resultados, data_consulta, limite_tinta=20):
     html += f"""
         <section class="tabela-final">
             <h2>Relatório completo em tabela</h2>
-            <p>Cada linha representa uma impressora. Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; linhas destacadas indicam falhas ou alertas. O total de páginas está destacado em amarelo.</p>
-            {gerar_tabela_completa(resultados, limite_tinta)}
+            <p>Cada linha representa uma impressora. USB é destacada em azul; falhas e alertas usam cores fortes. Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; o total de páginas está destacado em amarelo.</p>
+            {gerar_tabela_completa(resultados + linhas_usb, limite_tinta)}
         </section>
 """
 
@@ -1210,6 +1246,9 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                     'setor': setor,
                     'ip': ip,
                     'host': host,
+                    'tipo_conexao': (
+                        imp.get('tipo_conexao') or tipo_conexao_padrao(nome)
+                    ),
                     'status': f'Erro {resp_estado.status_code}',
                     'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
                     'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
@@ -1284,6 +1323,9 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'setor': setor,
                 'ip': ip,
                 'host': host,
+                'tipo_conexao': (
+                    imp.get('tipo_conexao') or tipo_conexao_padrao(nome)
+                ),
                 'status': resultados_status,
                 'nome_dispositivo': dados_identificacao['nome_dispositivo'],
                 'numero_serie': dados_identificacao['numero_serie'],
@@ -1313,6 +1355,9 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'setor': setor,
                 'ip': ip,
                 'host': host,
+                'tipo_conexao': (
+                    imp.get('tipo_conexao') or tipo_conexao_padrao(nome)
+                ),
                 'status': f'Falha de comunicação: {exc}',
                 'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
                 'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
@@ -2017,7 +2062,8 @@ def construir_interface(config, caminho_config):
             html_relatorio = gerar_html(
                 resultados,
                 data_consulta,
-                config['limite_tinta']
+                config['limite_tinta'],
+                impressoras_usb=config['impressoras']
             )
             root.after(0, lambda: atualizar_progresso(90, 'Salvando o relatório HTML...'))
             marca_tempo = datetime.now().strftime('%Y%m%d_%H%M%S')

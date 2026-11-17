@@ -503,13 +503,21 @@ class ConsultaImpressorasTests(unittest.TestCase):
             "status": "Sucesso",
             "tinta_preto": "15%",
         }
+        usb = {
+            "nome": "Pulmão",
+            "ip": "198.51.100.220",
+            "tipo_conexao": "USB",
+            "status": "Sucesso",
+        }
 
-        tabela = app.gerar_tabela_completa([sem_comunicacao, tinta_baixa])
+        tabela = app.gerar_tabela_completa([sem_comunicacao, tinta_baixa, usb])
 
         self.assertIn('class="linha-impressora sem-comunicacao"', tabela)
         self.assertIn('class="linha-impressora alerta-tinta-baixa"', tabela)
-        self.assertIn("background:#fee2e2;color:#991b1b", tabela)
-        self.assertIn("background:#ffedd5;color:#9a3412", tabela)
+        self.assertIn('class="linha-impressora conexao-usb"', tabela)
+        self.assertIn("background:#991b1b;color:#fff;font-weight:bold;", tabela)
+        self.assertIn("background:#c2410c;color:#fff;font-weight:bold;", tabela)
+        self.assertIn("background:#1d4ed8;color:#fff;font-weight:bold;", tabela)
 
     def test_csv_inclui_nome_dispositivo_numero_serie_e_contadores_no_inicio(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:
@@ -568,13 +576,28 @@ class ConsultaImpressorasTests(unittest.TestCase):
             "total_1face": "11404",
         }
 
-        relatorio = app.gerar_html([item], "16/11/2026")
+        relatorio = app.gerar_html(
+            [item],
+            "16/11/2026",
+            impressoras_usb=[{
+                "nome": "Pulmão",
+                "setor": "Produção",
+                "host": "PRINTER-USB",
+                "ip": "198.51.100.220",
+                "numero_serie": "SNUSB123",
+                "tipo_conexao": "USB",
+            }],
+        )
 
         self.assertIn("localizacao-setor", relatorio)
         self.assertIn("localizacao-ip", relatorio)
         self.assertIn('<section class="tabela-final">', relatorio)
         self.assertIn("Nome do dispositivo", relatorio)
         self.assertIn("Número de série", relatorio)
+        self.assertIn("Tipo Conexão", relatorio)
+        self.assertIn('class="linha-impressora conexao-usb"', relatorio)
+        self.assertIn("USB — não consultada (conexão local)", relatorio)
+        self.assertIn('<strong>Total de equipamentos</strong><span>2</span>', relatorio)
         self.assertIn("EPSONTEST01", relatorio)
         self.assertIn("SNTEST12345", relatorio)
         self.assertIn(
