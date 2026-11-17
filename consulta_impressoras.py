@@ -229,6 +229,15 @@ def link_gestao_impressora_html(ip):
     )
 
 
+def abrir_gestao_impressora(ip):
+    url = url_gestao_impressora(ip)
+    if not url:
+        raise ValueError(f'Endereço IPv4 inválido para abrir a gestão: {limpar_texto(ip)}')
+    if not webbrowser.open(url, new=2):
+        raise RuntimeError(f'Não foi possível abrir a página de gestão em {url}.')
+    return url
+
+
 def extrair_porcentagem(valor):
     if valor is None:
         return None
@@ -1247,6 +1256,7 @@ def construir_interface(config, caminho_config):
     root.configure(bg='#eef3f8')
 
     dados = {'resultados': None, 'data': None, 'html': None, 'csv': None}
+    alertas_imediatos_ativos = []
     pasta_relatorios = PASTA_DADOS / 'relatorios'
     pasta_relatorios.mkdir(parents=True, exist_ok=True)
 
@@ -1348,6 +1358,8 @@ def construir_interface(config, caminho_config):
         fg='#334155',
         bg='#f8fafc',
         activestyle='none',
+        selectmode='browse',
+        cursor='hand2',
         borderwidth=0,
         highlightthickness=0
     )
@@ -1356,6 +1368,38 @@ def construir_interface(config, caminho_config):
     falhas_scroll.grid(row=0, column=1, sticky='ns')
     falhas_lista.configure(yscrollcommand=falhas_scroll.set)
     falhas_lista.insert(tk.END, 'Aguardando a primeira consulta.')
+
+    def abrir_gestao_alerta_selecionado(_event=None):
+        selecao = falhas_lista.curselection()
+        if not selecao:
+            return
+        indice = selecao[0]
+        if indice >= len(alertas_imediatos_ativos):
+            return
+        try:
+            abrir_gestao_impressora(alertas_imediatos_ativos[indice]['ip'])
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror(
+                'Não foi possível abrir a gestão',
+                str(exc),
+                parent=root
+            )
+
+    falhas_lista.bind('<Double-Button-1>', abrir_gestao_alerta_selecionado)
+    botao_abrir_gestao = tk.Button(
+        falhas_frame,
+        text='Abrir gestão do IP selecionado',
+        command=abrir_gestao_alerta_selecionado,
+        bg='#0f4c81',
+        fg='white',
+        activebackground='#0b3a63',
+        activeforeground='white',
+        relief='flat',
+        padx=10,
+        pady=6,
+        state='disabled'
+    )
+    botao_abrir_gestao.grid(row=1, column=0, sticky='w', pady=(6, 0))
 
     def rolar_painel_com_mouse(event):
         if event.widget is falhas_lista:
@@ -1791,6 +1835,10 @@ def construir_interface(config, caminho_config):
             alerta for alerta in alertas
             if alerta['tipo'] in ('Sem comunicação', 'Tinta vazia', 'Tinta baixa')
         ]
+        alertas_imediatos_ativos[:] = alertas_imediatos
+        botao_abrir_gestao.config(
+            state='normal' if alertas_imediatos else 'disabled'
+        )
         if alertas_imediatos:
             for alerta in alertas_imediatos:
                 falhas_lista.insert(

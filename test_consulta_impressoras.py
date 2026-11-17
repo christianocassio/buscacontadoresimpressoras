@@ -100,6 +100,20 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertTrue(urls[1].startswith("https://wa.me/447700900124?text="))
         self.assertEqual(urls[0].split("?text=", 1)[1], urls[1].split("?text=", 1)[1])
 
+    def test_abrir_gestao_impressora_abre_url_do_ip(self):
+        with patch.object(app.webbrowser, "open", return_value=True) as abrir:
+            url = app.abrir_gestao_impressora("192.0.2.220")
+
+        self.assertEqual(
+            url,
+            "https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP",
+        )
+        abrir.assert_called_once_with(url, new=2)
+
+    def test_abrir_gestao_impressora_rejeita_ip_invalido(self):
+        with self.assertRaisesRegex(ValueError, "IPv4 inválido"):
+            app.abrir_gestao_impressora('192.0.2.220"><script>')
+
     def test_extrai_nivel_de_tinta_do_atributo_acessivel_do_icone(self):
         pagina = """
         <html><body>
