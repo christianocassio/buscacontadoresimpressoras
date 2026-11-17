@@ -6,7 +6,7 @@ Aplicativo para Windows que consulta impressoras Epson na rede, acompanha tinta 
 
 - Consulta status, consumíveis, identificação técnica, número de série e contadores.
 - Destaca tinta vazia/baixa e falhas de comunicação; nível de papel fica apenas no detalhamento técnico.
-- Gera relatório HTML com resumo, alertas prioritários e tabela final horizontal; também salva CSV.
+- Gera relatório HTML com resumo, alertas prioritários e tabela final horizontal; também salva CSV. Os IPs no relatório e no e-mail abrem a página de gestão Epson, os links também seguem no WhatsApp, e o nível de tinta fica junto dos contadores.
 - Cria rascunho de e-mail `.eml` com a tabela e abre conversas de WhatsApp com mensagem pronta. O envio é manual.
 - Permite cadastrar impressoras, setor, hostname e IP, além de e-mails, telefones e limite de alerta de tinta.
 - Interface maximizada, com rolagem da tela e painel de alertas.

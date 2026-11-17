@@ -206,6 +206,29 @@ def escapar_html(valor):
     return html.escape(limpar_texto(valor))
 
 
+def url_gestao_impressora(ip):
+    try:
+        endereco = ipaddress.ip_address(limpar_texto(ip))
+    except ValueError:
+        return None
+    if endereco.version != 4:
+        return None
+    return f"https://{endereco}{CAMINHO_REDE}"
+
+
+def link_gestao_impressora_html(ip):
+    endereco = limpar_texto(ip)
+    url = url_gestao_impressora(endereco)
+    if not url:
+        return escapar_html(endereco)
+    return (
+        f'<a href="{escapar_html(url)}" target="_blank" rel="noopener noreferrer" '
+        'title="Abrir página de gestão da impressora" '
+        'style="color:inherit;text-decoration:underline">'
+        f'{escapar_html(endereco)}</a>'
+    )
+
+
 def extrair_porcentagem(valor):
     if valor is None:
         return None
@@ -505,6 +528,7 @@ COLUNAS_TABELA_COMPLETA = (
     ('total_cor', 'Cor'),
     ('total_2faces', 'Impressão em 2 faces'),
     ('total_1face', 'Impressão em 1 face'),
+    ('tinta_preto', 'Tinta preta'),
     ('nome_dispositivo', 'Nome do dispositivo'),
     ('numero_serie', 'Número de série'),
     ('modelo', 'Modelo'),
@@ -515,7 +539,6 @@ COLUNAS_TABELA_COMPLETA = (
     ('estado_digitalizador', 'Estado do digitalizador'),
     ('leitor_cartao', 'Leitor de cartão'),
     ('epson_connect', 'Epson Connect'),
-    ('tinta_preto', 'Tinta preta'),
     ('caixa_manutencao', 'Caixa de manutenção'),
     ('nivel_papel', 'Nível de papel geral'),
     ('nivel_papel_bandeja1', 'Bandeja 1'),
@@ -528,6 +551,7 @@ COLUNAS_TABELA_COMPLETA = (
 def gerar_tabela_completa(resultados, limite_tinta=20):
     cabecalho = []
     contadores = {'total_pb', 'total_cor', 'total_2faces', 'total_1face'}
+    colunas_contadores_destaque = contadores | {'tinta_preto'}
     identificacao = {'setor', 'host', 'ip'}
     alertas_por_ip = {
         alerta['ip']: alerta['tipo']
@@ -543,7 +567,7 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
                 'border:1px solid #cbd5e1;padding:8px 10px;text-align:left;'
                 'white-space:nowrap;background:#facc15;color:#713f12;'
             )
-        elif chave in contadores:
+        elif chave in colunas_contadores_destaque:
             estilo = (
                 'border:1px solid #cbd5e1;padding:8px 10px;text-align:left;'
                 'white-space:nowrap;background:#dbeafe;color:#1e3a8a;'
@@ -584,14 +608,16 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
                 classe = ' class="contador-paginas"'
             elif estilo_linha:
                 estilo += estilo_linha
-            elif chave in contadores:
+            elif chave in colunas_contadores_destaque:
                 estilo += 'background:#eff6ff;color:#1e3a8a;'
             elif chave in identificacao:
                 estilo += 'background:#f8fafc;font-weight:bold;'
-            celulas.append(
-                f'<td{classe} style="{estilo}">'
-                f'{escapar_html(item.get(chave))}</td>'
+            valor = (
+                link_gestao_impressora_html(item.get(chave))
+                if chave == 'ip'
+                else escapar_html(item.get(chave))
             )
+            celulas.append(f'<td{classe} style="{estilo}">{valor}</td>')
         classes_linha = ' '.join(
             classe for classe in ('linha-impressora', classe_linha) if classe
         )
@@ -728,7 +754,7 @@ def gerar_html(resultados, data_consulta, limite_tinta=20):
                     </div>
                     <p class=\"acao-detalhe\">
                         <strong>Setor físico:</strong> {escapar_html(alerta['setor'])}
-                        &nbsp; | &nbsp; <strong>Endereço IP:</strong> {escapar_html(alerta['ip'])}
+                        &nbsp; | &nbsp; <strong>Endereço IP:</strong> {link_gestao_impressora_html(alerta['ip'])}
                         &nbsp; | &nbsp; <strong>Hostname:</strong> {escapar_html(alerta['host'])}
                     </p>
                     <p class="acao-detalhe">
@@ -777,7 +803,7 @@ def gerar_html(resultados, data_consulta, limite_tinta=20):
                     </div>
                     <div class=\"localizacao-item localizacao-ip\">
                         <span>ENDEREÇO IP</span>
-                        <strong>{escapar_html(r.get('ip'))}</strong>
+                        <strong>{link_gestao_impressora_html(r.get('ip'))}</strong>
                     </div>
                 </div>
                 <div class=\"grid\">
@@ -980,11 +1006,13 @@ def montar_whatsapp_body(resultados, data_consulta):
             ''
         ])
         for item in falhas_comunicacao:
+            ip = limpar_texto(item.get('ip'))
             linhas.extend([
                 f"*{limpar_texto(item.get('nome'), 'Impressora')} — SEM COMUNICAÇÃO*",
                 f"Setor: {limpar_texto(item.get('setor'))}",
                 f"Máquina: {limpar_texto(item.get('host'))}",
-                f"IP: {limpar_texto(item.get('ip'))} | MAC: {limpar_texto(item.get('mac'))}",
+                f"IP: {ip} | Gestão: {url_gestao_impressora(ip) or '-'} | "
+                f"MAC: {limpar_texto(item.get('mac'))}",
                 f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))}",
                 f"Número de série: {limpar_texto(item.get('numero_serie'))}",
                 '*Ação: acionar o TI da filial.*',
@@ -995,10 +1023,13 @@ def montar_whatsapp_body(resultados, data_consulta):
 
     linhas.extend(['*DETALHAMENTO COMPLETO*', ''])
     for item in resultados:
+        ip = limpar_texto(item.get('ip'))
         linhas.extend([
             f"Identificação: {limpar_texto(item.get('nome'), 'Impressora')} | Modelo: {limpar_texto(item.get('modelo'))}",
             f"Setor físico: {limpar_texto(item.get('setor'))}",
-            f"Hostname: {limpar_texto(item.get('host'))} | IP: {limpar_texto(item.get('ip'))} | MAC: {limpar_texto(item.get('mac'))}",
+            f"Hostname: {limpar_texto(item.get('host'))} | IP: {ip} | "
+            f"Gestão: {url_gestao_impressora(ip) or '-'} | "
+            f"MAC: {limpar_texto(item.get('mac'))}",
             f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))}",
             f"Número de série: {limpar_texto(item.get('numero_serie'))}",
             f"Status: {limpar_texto(item.get('status'))}",

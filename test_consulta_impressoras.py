@@ -229,7 +229,11 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertIn("*⚠️ IMPRESSORAS SEM COMUNICAÇÃO — ACIONAR O TI DA FILIAL*", mensagem)
         self.assertIn("*Impressora 02 — SEM COMUNICAÇÃO*", mensagem)
         self.assertIn("Setor: Setor B", mensagem)
-        self.assertIn("MAC: 02:00:00:00:00:01", mensagem)
+        self.assertIn(
+            "IP: 192.0.2.221 | Gestão: https://192.0.2.221/PRESENTATION/ADVANCED/COMMON/TOP | "
+            "MAC: 02:00:00:00:00:01",
+            mensagem,
+        )
         self.assertIn("Nome do dispositivo: EPSONTEST01", mensagem)
         self.assertIn("Número de série: SNTEST12345", mensagem)
         self.assertNotIn("*⚠️ IMPRESSORAS COM TINTA VAZIA OU BAIXA*", mensagem)
@@ -239,7 +243,9 @@ class ConsultaImpressorasTests(unittest.TestCase):
             mensagem,
         )
         self.assertIn(
-            "Hostname: PRINTER-01 | IP: 192.0.2.220 | MAC: 02:00:00:00:00:01",
+            "Hostname: PRINTER-01 | IP: 192.0.2.220 | "
+            "Gestão: https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP | "
+            "MAC: 02:00:00:00:00:01",
             mensagem,
         )
         self.assertIn("Tinta preta: 15%", mensagem)
@@ -298,6 +304,9 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertLess(corpo.index("Setor físico"), corpo.index("Hostname"))
         self.assertLess(corpo.index("Hostname"), corpo.index(">IP<"))
         self.assertLess(corpo.index("Número total de páginas"), corpo.index("Nome do dispositivo"))
+        self.assertLess(corpo.index("Impressão em 1 face"), corpo.index("Tinta preta"))
+        self.assertLess(corpo.index("Tinta preta"), corpo.index("Nome do dispositivo"))
+        self.assertEqual(corpo.count(">Tinta preta<"), 1)
         self.assertNotIn(">Identificação<", corpo)
         self.assertEqual(corpo.count('<tr class="linha-impressora">'), 1)
         self.assertIn('overflow-x:auto', corpo)
@@ -307,6 +316,10 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertIn("Tecnologia &lt;teste&gt;", corpo)
         self.assertIn("EPSONTEST01", corpo)
         self.assertIn("SNTEST12345", corpo)
+        self.assertIn(
+            'href="https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP"',
+            corpo,
+        )
         self.assertNotIn("Tecnologia <teste>", corpo)
 
         with tempfile.TemporaryDirectory() as pasta_temporaria:
@@ -434,6 +447,10 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertIn("Número de série", relatorio)
         self.assertIn("EPSONTEST01", relatorio)
         self.assertIn("SNTEST12345", relatorio)
+        self.assertIn(
+            'href="https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP"',
+            relatorio,
+        )
         self.assertIn('class="dados-impressora"', relatorio)
         self.assertIn('<th scope="col"', relatorio)
         self.assertEqual(relatorio.count('<tr class="linha-impressora">'), 1)
@@ -516,6 +533,10 @@ class ConsultaImpressorasTests(unittest.TestCase):
             relatorio.index('<div class="card">'),
         )
         self.assertIn("Acionar o TI da filial", relatorio)
+        self.assertIn(
+            'href="https://192.0.2.221/PRESENTATION/ADVANCED/COMMON/TOP"',
+            relatorio,
+        )
         self.assertIn("Substituir o cartucho preto no setor Setor A", relatorio)
         self.assertIn("Nível de tinta preta: 15%", relatorio)
         self.assertNotIn("Papel vazio", relatorio)
