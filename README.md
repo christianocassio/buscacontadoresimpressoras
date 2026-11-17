@@ -8,8 +8,9 @@ Aplicativo para Windows que consulta impressoras Epson na rede, acompanha tinta 
 - Destaca tinta vazia/baixa e falhas de comunicação; nível de papel fica apenas no detalhamento técnico.
 - Gera relatório HTML com resumo, alertas prioritários e tabela final horizontal; também salva CSV. Os IPs no relatório e no e-mail abrem a página de gestão Epson, os links também seguem no WhatsApp, e o nível de tinta fica junto dos contadores.
 - Cria rascunho de e-mail `.eml` com a tabela e abre conversas de WhatsApp com mensagem pronta. O envio é manual.
-- Na tela de alertas, selecione uma linha e clique em **Abrir gestão do IP selecionado** (ou dê duplo clique nela) para abrir a página da impressora no navegador. Também permite cadastrar impressoras, setor, hostname e IP, além de e-mails, telefones e limite de alerta de tinta.
-- Interface maximizada, com rolagem da tela e painel de alertas.
+- Na tabela de alertas, clique diretamente no IP para abrir a página de gestão da impressora no navegador. A tabela destaca falhas de comunicação e alertas de tinta, com rolagem vertical e horizontal.
+- O cadastro de impressoras inclui número de série: ele é extraído na consulta quando disponível, salvo no cadastro e pode ser digitado ou corrigido manualmente. Os identificadores (incluindo número de série, modelo e MAC) ficam agrupados com o IP nos relatórios, no e-mail e no WhatsApp.
+- Interface compacta para mostrar os controles em uma tela, mantendo os oito alertas visíveis com rolagem interna. O cabeçalho informa a versão, o horário do executável e o desenvolvedor, e inclui um atalho para Releases.
 
 ## Download
 
@@ -23,7 +24,7 @@ Na primeira execução, o aplicativo copia essa configuração para:
 
 `%APPDATA%\ConsultaImpressoras\config.json`
 
-Cadastre os dispositivos reais e a faixa CIDR da rede da filial pelo botão **Gerenciar impressoras** e pelo arquivo de configuração. Informe os destinatários nos campos de e-mail e WhatsApp; vários contatos podem ser separados por ponto e vírgula. O limite de tinta padrão é 20%.
+Cadastre os dispositivos reais e a faixa CIDR da rede da filial pelo botão **Gerenciar impressoras** e pelo arquivo de configuração. O número de série pode ser preenchido manualmente ou detectado durante a consulta. Informe os destinatários nos campos de e-mail e WhatsApp; vários contatos podem ser separados por ponto e vírgula. O limite de tinta padrão é 20%.
 
 Uma configuração que já exista em `%APPDATA%\ConsultaImpressoras\config.json` é preservada. Não publique arquivos de configuração reais, relatórios ou dados de impressoras: eles podem conter contatos, endereços IP, números de série e endereços MAC.
 

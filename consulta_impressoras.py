@@ -50,6 +50,19 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
+APP_VERSION = "1.0.3"
+APP_DEVELOPER = "Christiano Miranda"
+URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
+
+
+def texto_versao_aplicativo():
+    if getattr(sys, "frozen", False):
+        caminho_executavel = Path(sys.executable)
+        data_build = datetime.fromtimestamp(caminho_executavel.stat().st_mtime)
+        build = data_build.strftime("%d/%m/%Y %H:%M")
+    else:
+        build = "código-fonte"
+    return f"v{APP_VERSION} | {build} | Desenvolvedor: {APP_DEVELOPER}"
 
 
 def caminho_recurso(nome):
@@ -130,10 +143,13 @@ def validar_lista_impressoras(lista):
         setor = item.get("setor", "Não informado")
         host = item.get("host")
         ip = item.get("ip")
+        numero_serie = item.get("numero_serie", "")
         if not all(isinstance(valor, str) and valor.strip() for valor in (nome, setor, host, ip)):
             raise ValueError(
                 f"Preencha identificação, setor, hostname e IP da impressora {indice}."
             )
+        if not isinstance(numero_serie, str):
+            raise ValueError(f"O número de série da impressora {indice} deve ser texto.")
         try:
             endereco = ipaddress.ip_address(ip.strip())
         except ValueError as exc:
@@ -149,10 +165,26 @@ def validar_lista_impressoras(lista):
             "nome": nome.strip(),
             "setor": setor.strip(),
             "host": host.strip(),
-            "ip": ip_normalizado
+            "ip": ip_normalizado,
+            "numero_serie": numero_serie.strip()
         })
 
     return impressoras_validadas
+
+
+def atualizar_seriais_cadastrados(config, resultados):
+    seriais_por_ip = {
+        limpar_texto(item.get('ip')): limpar_texto(item.get('numero_serie'))
+        for item in resultados
+        if limpar_texto(item.get('numero_serie')) != '-'
+    }
+    alterou = False
+    for impressora in config['impressoras']:
+        numero_serie = seriais_por_ip.get(impressora['ip'])
+        if numero_serie and impressora.get('numero_serie', '') != numero_serie:
+            impressora['numero_serie'] = numero_serie
+            alterou = True
+    return alterou
 
 
 def limpar_texto(valor, padrao='-'):
@@ -532,17 +564,18 @@ COLUNAS_TABELA_COMPLETA = (
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
     ('ip', 'IP'),
+    ('nome', 'Identificação'),
+    ('nome_dispositivo', 'Nome do dispositivo'),
+    ('numero_serie', 'Número de série'),
+    ('modelo', 'Modelo'),
+    ('mac', 'MAC'),
+    ('firmware', 'Firmware'),
     ('total_geral', 'Número total de páginas'),
     ('total_pb', 'P&B'),
     ('total_cor', 'Cor'),
     ('total_2faces', 'Impressão em 2 faces'),
     ('total_1face', 'Impressão em 1 face'),
     ('tinta_preto', 'Tinta preta'),
-    ('nome_dispositivo', 'Nome do dispositivo'),
-    ('numero_serie', 'Número de série'),
-    ('modelo', 'Modelo'),
-    ('mac', 'MAC'),
-    ('firmware', 'Firmware'),
     ('status', 'Status'),
     ('estado_impressora', 'Estado da impressora'),
     ('estado_digitalizador', 'Estado do digitalizador'),
@@ -561,7 +594,10 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
     cabecalho = []
     contadores = {'total_pb', 'total_cor', 'total_2faces', 'total_1face'}
     colunas_contadores_destaque = contadores | {'tinta_preto'}
-    identificacao = {'setor', 'host', 'ip'}
+    identificacao = {
+        'setor', 'host', 'ip', 'nome', 'nome_dispositivo',
+        'numero_serie', 'modelo', 'mac', 'firmware'
+    }
     alertas_por_ip = {
         alerta['ip']: alerta['tipo']
         for alerta in gerar_alertas(resultados, limite_tinta)
@@ -866,7 +902,7 @@ def gerar_html(resultados, data_consulta, limite_tinta=20):
     html += f"""
         <section class="tabela-final">
             <h2>Relatório completo em tabela</h2>
-            <p>Cada linha representa uma impressora. As colunas de contadores aparecem após setor, hostname e IP; linhas destacadas indicam falhas ou alertas. O total de páginas está destacado em amarelo.</p>
+            <p>Cada linha representa uma impressora. Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; linhas destacadas indicam falhas ou alertas. O total de páginas está destacado em amarelo.</p>
             {gerar_tabela_completa(resultados, limite_tinta)}
         </section>
 """
@@ -893,17 +929,17 @@ def salvar_csv(resultados, caminho):
         ('setor', 'Setor físico'),
         ('host', 'Hostname'),
         ('ip', 'IP'),
+        ('nome', 'Identificação'),
+        ('nome_dispositivo', 'Nome do dispositivo'),
+        ('numero_serie', 'Número de série'),
+        ('modelo', 'Modelo'),
+        ('mac', 'MAC'),
+        ('firmware', 'Firmware'),
         ('total_geral', 'Total geral'),
         ('total_pb', 'Total P&B'),
         ('total_cor', 'Total cor'),
         ('total_2faces', 'Total 2 faces'),
         ('total_1face', 'Total 1 face'),
-        ('nome_dispositivo', 'Nome do dispositivo'),
-        ('numero_serie', 'Número de série'),
-        ('nome', 'Identificação'),
-        ('modelo', 'Modelo'),
-        ('mac', 'MAC'),
-        ('firmware', 'Firmware'),
         ('status', 'Status'),
         ('estado_impressora', 'Estado da impressora'),
         ('estado_digitalizador', 'Estado do digitalizador'),
@@ -974,7 +1010,7 @@ def montar_email_body(resultados, data_consulta, caminho_html, caminho_csv, limi
     <p><strong>Data da consulta:</strong> {escapar_html(data_consulta)}<br>
     <strong>Equipamentos consultados:</strong> {len(resultados)}</p>
     <h2 style="color:#0f4c81;">Detalhamento dos equipamentos</h2>
-    <p>As colunas começam com setor, hostname, IP e contadores; as linhas destacadas indicam falhas ou alertas. O total de páginas está em amarelo.</p>
+    <p>Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; as linhas destacadas indicam falhas ou alertas. O total de páginas está em amarelo.</p>
     {gerar_tabela_completa(resultados, limite_tinta)}
     <h3 style="color:#0f4c81;">Arquivos do relatório</h3>
     <p>HTML: {escapar_html(caminho_html)}<br>
@@ -1022,8 +1058,9 @@ def montar_whatsapp_body(resultados, data_consulta):
                 f"Máquina: {limpar_texto(item.get('host'))}",
                 f"IP: {ip} | Gestão: {url_gestao_impressora(ip) or '-'} | "
                 f"MAC: {limpar_texto(item.get('mac'))}",
-                f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))}",
-                f"Número de série: {limpar_texto(item.get('numero_serie'))}",
+                f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))} | "
+                f"Número de série: {limpar_texto(item.get('numero_serie'))} | "
+                f"Modelo: {limpar_texto(item.get('modelo'))}",
                 '*Ação: acionar o TI da filial.*',
                 ''
             ])
@@ -1039,8 +1076,9 @@ def montar_whatsapp_body(resultados, data_consulta):
             f"Hostname: {limpar_texto(item.get('host'))} | IP: {ip} | "
             f"Gestão: {url_gestao_impressora(ip) or '-'} | "
             f"MAC: {limpar_texto(item.get('mac'))}",
-            f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))}",
-            f"Número de série: {limpar_texto(item.get('numero_serie'))}",
+            f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))} | "
+            f"Número de série: {limpar_texto(item.get('numero_serie'))} | "
+            f"Modelo: {limpar_texto(item.get('modelo'))}",
             f"Status: {limpar_texto(item.get('status'))}",
             f"Tinta preta: {limpar_texto(item.get('tinta_preto'))}",
             (
@@ -1138,7 +1176,8 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                     'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
                     'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
                     'firmware': '-', 'mac': '-', 'nome_dispositivo': '-',
-                    'numero_serie': '-', 'data_hora': '-', 'epson_connect': '-',
+                    'numero_serie': limpar_texto(imp.get('numero_serie')),
+                    'data_hora': '-', 'epson_connect': '-',
                     'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
                     'total_cor': '-', 'total_2faces': '-', 'total_1face': '-'
                 })
@@ -1180,6 +1219,10 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 except requests.RequestException as exc:
                     avisos_parciais.append(f'consulta de identificação de rede falhou: {exc}')
 
+            if dados_identificacao['numero_serie'] == '-':
+                dados_identificacao['numero_serie'] = limpar_texto(
+                    imp.get('numero_serie')
+                )
             identificacao_ausente = [
                 rotulo
                 for chave, rotulo in (
@@ -1236,7 +1279,8 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
                 'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
                 'firmware': '-', 'mac': '-', 'nome_dispositivo': '-',
-                'numero_serie': '-', 'data_hora': '-', 'epson_connect': '-',
+                'numero_serie': limpar_texto(imp.get('numero_serie')),
+                'data_hora': '-', 'epson_connect': '-',
                 'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
                 'total_cor': '-', 'total_2faces': '-', 'total_1face': '-'
             })
@@ -1250,13 +1294,13 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
 def construir_interface(config, caminho_config):
     root = tk.Tk()
     root.title('Monitoramento de Impressoras')
-    root.geometry('780x610')
-    root.minsize(720, 570)
+    root.geometry('1024x700')
+    root.minsize(820, 620)
     root.state('zoomed')
     root.configure(bg='#eef3f8')
 
     dados = {'resultados': None, 'data': None, 'html': None, 'csv': None}
-    alertas_imediatos_ativos = []
+    alertas_por_iid = {}
     pasta_relatorios = PASTA_DADOS / 'relatorios'
     pasta_relatorios.mkdir(parents=True, exist_ok=True)
 
@@ -1272,11 +1316,11 @@ def construir_interface(config, caminho_config):
     canvas.pack(side='left', fill='both', expand=True)
     rolagem_vertical.pack(side='right', fill='y')
 
-    frame = tk.Frame(canvas, padx=24, pady=20, bg='white')
-    frame_id = canvas.create_window((18, 18), window=frame, anchor='nw')
+    frame = tk.Frame(canvas, padx=14, pady=10, bg='white')
+    frame_id = canvas.create_window((8, 8), window=frame, anchor='nw')
 
     def atualizar_largura_conteudo(event):
-        canvas.itemconfigure(frame_id, width=max(1, event.width - 36))
+        canvas.itemconfigure(frame_id, width=max(1, event.width - 16))
 
     def atualizar_area_rolagem(_event=None):
         canvas.configure(scrollregion=canvas.bbox('all'))
@@ -1285,60 +1329,92 @@ def construir_interface(config, caminho_config):
     frame.bind('<Configure>', atualizar_area_rolagem)
     frame.columnconfigure(0, weight=1)
 
+    cabecalho = tk.Frame(frame, bg='white')
+    cabecalho.grid(row=0, column=0, sticky='ew')
+    cabecalho.columnconfigure(1, weight=1)
     tk.Label(
-        frame,
+        cabecalho,
         text='Relatório mensal de impressoras',
-        font=('Arial', 18, 'bold'),
+        font=('Arial', 16, 'bold'),
         fg='#0f4c81',
         bg='white'
     ).grid(row=0, column=0, sticky='w')
+
+    def abrir_releases():
+        if not webbrowser.open(URL_RELEASES, new=2):
+            messagebox.showerror(
+                'Não foi possível abrir Releases',
+                'Verifique a conexão e abra a página de Releases manualmente.',
+                parent=root
+            )
+
+    tk.Label(
+        cabecalho,
+        text=texto_versao_aplicativo(),
+        font=('Arial', 8),
+        fg='#475569',
+        bg='white'
+    ).grid(row=0, column=1, sticky='e', padx=(8, 6))
+    tk.Button(
+        cabecalho,
+        text='Releases',
+        command=abrir_releases,
+        bg='#0f4c81',
+        fg='white',
+        activebackground='#0b3a63',
+        activeforeground='white',
+        font=('Arial', 8, 'bold'),
+        relief='flat',
+        padx=8,
+        pady=3
+    ).grid(row=0, column=2, sticky='e')
     tk.Label(
         frame,
         text='A consulta inicia ao abrir o programa. O relatório será aberto no navegador ao terminar.',
-        font=('Arial', 10),
+        font=('Arial', 9),
         fg='#475569',
         bg='white',
         wraplength=690,
         justify='left'
-    ).grid(row=1, column=0, sticky='w', pady=(6, 18))
+    ).grid(row=1, column=0, sticky='w', pady=(3, 8))
 
     tk.Label(
         frame,
         text='E-mails do fornecedor (separe com ponto e vírgula)',
-        font=('Arial', 10, 'bold'),
+        font=('Arial', 9, 'bold'),
         bg='white'
     ).grid(
-        row=2, column=0, sticky='w', pady=(0, 5)
+        row=2, column=0, sticky='w', pady=(0, 3)
     )
     email_var = tk.StringVar(value=config['email_padrao'])
-    tk.Entry(frame, textvariable=email_var, font=('Arial', 11)).grid(
-        row=3, column=0, sticky='ew', pady=(0, 13), ipady=5
+    tk.Entry(frame, textvariable=email_var, font=('Arial', 10)).grid(
+        row=3, column=0, sticky='ew', pady=(0, 7), ipady=2
     )
 
     tk.Label(
         frame,
         text='WhatsApp do fornecedor (separe os números com ponto e vírgula)',
-        font=('Arial', 10, 'bold'),
+        font=('Arial', 9, 'bold'),
         bg='white'
     ).grid(
-        row=4, column=0, sticky='w', pady=(0, 5)
+        row=4, column=0, sticky='w', pady=(0, 3)
     )
     whatsapp_var = tk.StringVar(value=config['whatsapp_padrao'])
-    tk.Entry(frame, textvariable=whatsapp_var, font=('Arial', 11)).grid(
-        row=5, column=0, sticky='ew', pady=(0, 14), ipady=5
+    tk.Entry(frame, textvariable=whatsapp_var, font=('Arial', 10)).grid(
+        row=5, column=0, sticky='ew', pady=(0, 7), ipady=2
     )
 
     status_var = tk.StringVar(value='Verificando a conexão com a rede corporativa...')
     status_label = tk.Label(
         frame,
         textvariable=status_var,
-        font=('Arial', 10, 'bold'),
+        font=('Arial', 9, 'bold'),
         fg='#0f4c81',
         bg='white',
         wraplength=690,
         justify='left'
     )
-    status_label.grid(row=6, column=0, sticky='w', pady=(0, 8))
+    status_label.grid(row=6, column=0, sticky='w', pady=(0, 5))
 
     falhas_frame = tk.LabelFrame(
         frame,
@@ -1346,38 +1422,82 @@ def construir_interface(config, caminho_config):
         font=('Arial', 9, 'bold'),
         fg='#991b1b',
         bg='white',
-        padx=8,
-        pady=6
+        padx=5,
+        pady=3
     )
-    falhas_frame.grid(row=7, column=0, sticky='ew', pady=(0, 10))
+    falhas_frame.grid(row=7, column=0, sticky='ew', pady=(0, 6))
     falhas_frame.columnconfigure(0, weight=1)
-    falhas_lista = tk.Listbox(
+    colunas_alertas = (
+        'tipo', 'setor', 'nome', 'ip', 'nome_dispositivo',
+        'numero_serie', 'modelo', 'mac'
+    )
+    falhas_lista = ttk.Treeview(
         falhas_frame,
-        height=8,
-        font=('Arial', 9),
-        fg='#334155',
-        bg='#f8fafc',
-        activestyle='none',
+        columns=colunas_alertas,
+        show='headings',
         selectmode='browse',
-        cursor='hand2',
-        borderwidth=0,
-        highlightthickness=0
+        height=8,
+        style='Alertas.Treeview',
     )
     falhas_lista.grid(row=0, column=0, sticky='ew')
     falhas_scroll = ttk.Scrollbar(falhas_frame, orient='vertical', command=falhas_lista.yview)
     falhas_scroll.grid(row=0, column=1, sticky='ns')
-    falhas_lista.configure(yscrollcommand=falhas_scroll.set)
-    falhas_lista.insert(tk.END, 'Aguardando a primeira consulta.')
+    falhas_horizontal = ttk.Scrollbar(
+        falhas_frame,
+        orient='horizontal',
+        command=falhas_lista.xview
+    )
+    falhas_horizontal.grid(row=1, column=0, sticky='ew')
+    falhas_lista.configure(
+        yscrollcommand=falhas_scroll.set,
+        xscrollcommand=falhas_horizontal.set
+    )
+    for coluna, titulo, largura in (
+        ('tipo', 'Alerta', 145),
+        ('setor', 'Setor físico', 140),
+        ('nome', 'Impressora', 150),
+        ('ip', 'IP (clique para abrir)', 190),
+        ('nome_dispositivo', 'Nome do dispositivo', 160),
+        ('numero_serie', 'Número de série', 140),
+        ('modelo', 'Modelo', 170),
+        ('mac', 'MAC', 140)
+    ):
+        falhas_lista.heading(coluna, text=titulo)
+        falhas_lista.column(coluna, width=largura, anchor='w', stretch=False)
 
-    def abrir_gestao_alerta_selecionado(_event=None):
-        selecao = falhas_lista.curselection()
-        if not selecao:
+    falhas_lista.tag_configure(
+        'sem-comunicacao',
+        background='#fef2f2',
+        foreground='#991b1b'
+    )
+    falhas_lista.tag_configure(
+        'tinta-vazia',
+        background='#fef2f2',
+        foreground='#991b1b'
+    )
+    falhas_lista.tag_configure(
+        'tinta-baixa',
+        background='#fff7ed',
+        foreground='#9a3412'
+    )
+    falhas_lista.insert(
+        '',
+        tk.END,
+        values=('Aguardando a primeira consulta.', '', '', '', '', '', '', '')
+    )
+
+    def abrir_ip_da_linha(event):
+        if (
+            falhas_lista.identify_region(event.x, event.y) != 'cell'
+            or falhas_lista.identify_column(event.x) != '#4'
+        ):
             return
-        indice = selecao[0]
-        if indice >= len(alertas_imediatos_ativos):
+        iid = falhas_lista.identify_row(event.y)
+        alerta = alertas_por_iid.get(iid)
+        if not alerta:
             return
         try:
-            abrir_gestao_impressora(alertas_imediatos_ativos[indice]['ip'])
+            abrir_gestao_impressora(alerta['ip'])
         except (OSError, RuntimeError, ValueError) as exc:
             messagebox.showerror(
                 'Não foi possível abrir a gestão',
@@ -1385,21 +1505,17 @@ def construir_interface(config, caminho_config):
                 parent=root
             )
 
-    falhas_lista.bind('<Double-Button-1>', abrir_gestao_alerta_selecionado)
-    botao_abrir_gestao = tk.Button(
-        falhas_frame,
-        text='Abrir gestão do IP selecionado',
-        command=abrir_gestao_alerta_selecionado,
-        bg='#0f4c81',
-        fg='white',
-        activebackground='#0b3a63',
-        activeforeground='white',
-        relief='flat',
-        padx=10,
-        pady=6,
-        state='disabled'
-    )
-    botao_abrir_gestao.grid(row=1, column=0, sticky='w', pady=(6, 0))
+    def atualizar_cursor_ip(event):
+        sobre_ip = (
+            falhas_lista.identify_region(event.x, event.y) == 'cell'
+            and falhas_lista.identify_column(event.x) == '#4'
+            and bool(falhas_lista.identify_row(event.y))
+        )
+        falhas_lista.configure(cursor='hand2' if sobre_ip else '')
+
+    falhas_lista.bind('<Button-1>', abrir_ip_da_linha, add='+')
+    falhas_lista.bind('<Motion>', atualizar_cursor_ip, add='+')
+    falhas_lista.bind('<Leave>', lambda _event: falhas_lista.configure(cursor=''), add='+')
 
     def rolar_painel_com_mouse(event):
         if event.widget is falhas_lista:
@@ -1424,31 +1540,33 @@ def construir_interface(config, caminho_config):
 
     root.bind_all('<MouseWheel>', rolar_painel_com_mouse, add='+')
 
-    progresso_frame = tk.Frame(frame, bg='#f1f5f9', padx=12, pady=9)
-    progresso_frame.grid(row=8, column=0, sticky='ew', pady=(0, 12))
+    estilo = ttk.Style(root)
+    estilo.configure('Alertas.Treeview', font=('Arial', 8), rowheight=18)
+    estilo.configure('Alertas.Treeview.Heading', font=('Arial', 8, 'bold'))
+    progresso_frame = tk.Frame(frame, bg='#f1f5f9', padx=8, pady=5)
+    progresso_frame.grid(row=8, column=0, sticky='ew', pady=(0, 7))
     progresso_frame.columnconfigure(0, weight=1)
     tk.Label(
         progresso_frame,
         text='Progresso da consulta',
-        font=('Arial', 9, 'bold'),
+        font=('Arial', 8, 'bold'),
         fg='#334155',
         bg='#f1f5f9'
-    ).grid(row=0, column=0, sticky='w', pady=(0, 6))
+    ).grid(row=0, column=0, sticky='w', pady=(0, 3))
     progresso_var = tk.DoubleVar(value=0)
     progresso_percentual_var = tk.StringVar(value='0%')
     tk.Label(
         progresso_frame,
         textvariable=progresso_percentual_var,
-        font=('Arial', 9, 'bold'),
+        font=('Arial', 8, 'bold'),
         fg='#0f4c81',
         bg='#f1f5f9'
-    ).grid(row=0, column=1, sticky='e', pady=(0, 6))
-    estilo = ttk.Style(root)
+    ).grid(row=0, column=1, sticky='e', pady=(0, 3))
     estilo.configure(
         'Consulta.Horizontal.TProgressbar',
         troughcolor='#dbe4ee',
         background='#2563eb',
-        thickness=14
+        thickness=10
     )
     progresso = ttk.Progressbar(
         progresso_frame,
@@ -1466,19 +1584,19 @@ def construir_interface(config, caminho_config):
     atualizar_frame = tk.Frame(
         botoes,
         bg='#eff6ff',
-        padx=8,
-        pady=8,
+        padx=6,
+        pady=5,
         highlightbackground='#93c5fd',
         highlightthickness=1
     )
-    atualizar_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+    atualizar_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 6))
     tk.Label(
         atualizar_frame,
         text='Buscar os dados das impressoras novamente',
-        font=('Arial', 10, 'bold'),
+        font=('Arial', 9, 'bold'),
         fg='#1e3a8a',
         bg='#eff6ff'
-    ).pack(anchor='w', pady=(0, 6))
+    ).pack(anchor='w', pady=(0, 3))
     botao_atualizar = tk.Button(
         atualizar_frame,
         text='ATUALIZAR CONSULTA',
@@ -1487,14 +1605,14 @@ def construir_interface(config, caminho_config):
         fg='white',
         activebackground='#0b3a63',
         activeforeground='white',
-        font=('Arial', 12, 'bold'),
+        font=('Arial', 10, 'bold'),
         relief='flat',
-        padx=12,
-        pady=12
+        padx=10,
+        pady=6
     )
     botao_atualizar.pack(fill='x')
     ttk.Separator(botoes, orient='horizontal').grid(
-        row=1, column=0, columnspan=3, sticky='ew', pady=(0, 8)
+        row=1, column=0, columnspan=3, sticky='ew', pady=(0, 5)
     )
     botoes_secundarios = tk.Frame(botoes, bg='white')
     botoes_secundarios.grid(row=2, column=0, columnspan=3, sticky='ew')
@@ -1537,20 +1655,21 @@ def construir_interface(config, caminho_config):
 
         janela = tk.Toplevel(root)
         janela.title('Lista de impressoras da unidade')
-        janela.geometry('850x440')
-        janela.minsize(760, 380)
+        janela.geometry('930x460')
+        janela.minsize(860, 400)
         janela.transient(root)
         janela.columnconfigure(0, weight=1)
         janela.rowconfigure(0, weight=1)
 
         lista_editada = [dict(item) for item in config['impressoras']]
-        colunas = ('nome', 'setor', 'host', 'ip')
+        colunas = ('nome', 'setor', 'host', 'ip', 'numero_serie')
         tabela = ttk.Treeview(janela, columns=colunas, show='headings', selectmode='browse')
         for coluna, titulo, largura in (
-            ('nome', 'Identificação', 180),
-            ('setor', 'Setor físico', 210),
-            ('host', 'Hostname', 200),
-            ('ip', 'IP', 130)
+            ('nome', 'Identificação', 150),
+            ('setor', 'Setor físico', 150),
+            ('host', 'Hostname', 170),
+            ('ip', 'IP', 130),
+            ('numero_serie', 'Número de série', 170)
         ):
             tabela.heading(coluna, text=titulo)
             tabela.column(coluna, width=largura, anchor='w')
@@ -1568,16 +1687,22 @@ def construir_interface(config, caminho_config):
                     '',
                     tk.END,
                     iid=str(indice),
-                    values=(item['nome'], item['setor'], item['host'], item['ip'])
+                    values=(
+                        item['nome'],
+                        item['setor'],
+                        item['host'],
+                        item['ip'],
+                        item.get('numero_serie') or '-'
+                    )
                 )
 
         def editar_impressora(indice=None):
             registro = lista_editada[indice] if indice is not None else {
-                'nome': '', 'setor': '', 'host': '', 'ip': ''
+                'nome': '', 'setor': '', 'host': '', 'ip': '', 'numero_serie': ''
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
-            formulario.geometry('440x300')
+            formulario.geometry('480x350')
             formulario.resizable(False, False)
             formulario.transient(janela)
             formulario.grab_set()
@@ -1586,7 +1711,8 @@ def construir_interface(config, caminho_config):
                 ('Identificação', 'nome'),
                 ('Setor físico', 'setor'),
                 ('Hostname', 'host'),
-                ('IP IPv4', 'ip')
+                ('IP IPv4', 'ip'),
+                ('Número de Série', 'numero_serie')
             )
             variaveis = {}
             for linha, (rotulo, chave) in enumerate(campos):
@@ -1743,22 +1869,22 @@ def construir_interface(config, caminho_config):
             fg='white',
             activebackground=cor,
             activeforeground='white',
-            font=('Arial', 10, 'bold'),
+            font=('Arial', 9, 'bold'),
             relief='flat',
-            padx=8,
-            pady=9
+            padx=6,
+            pady=5
         )
-        botao.grid(row=indice // 3, column=indice % 3, padx=5, pady=5, sticky='ew')
+        botao.grid(row=indice // 3, column=indice % 3, padx=3, pady=3, sticky='ew')
 
     tk.Label(
         frame,
-        text=f'Configuração: {caminho_config}\nOs contatos editados são guardados para a próxima execução. O e-mail é aberto como rascunho; o envio e os anexos são manuais.',
-        font=('Arial', 9),
+        text=f'Configuração: {caminho_config} | Contatos são salvos para a próxima execução; envio de e-mail e anexos são manuais.',
+        font=('Arial', 8),
         fg='#64748b',
         bg='white',
         wraplength=690,
         justify='left'
-    ).grid(row=10, column=0, sticky='w', pady=(14, 0))
+    ).grid(row=10, column=0, sticky='w', pady=(7, 0))
 
     def consulta_em_segundo_plano():
         try:
@@ -1823,41 +1949,62 @@ def construir_interface(config, caminho_config):
     def consulta_concluida(resultados, data_consulta, caminho_html, caminho_csv):
         consultando['ativo'] = False
         botao_atualizar.config(state='normal')
+        if atualizar_seriais_cadastrados(config, resultados):
+            try:
+                salvar_config(config, caminho_config)
+            except OSError as exc:
+                messagebox.showwarning(
+                    'Número de série detectado',
+                    f'O número de série foi encontrado, mas não foi possível salvar '
+                    f'o cadastro: {exc}',
+                    parent=root
+                )
         dados.update({
             'resultados': resultados,
             'data': data_consulta,
             'html': caminho_html,
             'csv': caminho_csv
         })
-        falhas_lista.delete(0, tk.END)
+        itens_alertas = falhas_lista.get_children()
+        if itens_alertas:
+            falhas_lista.delete(*itens_alertas)
         alertas = gerar_alertas(resultados, config['limite_tinta'])
         alertas_imediatos = [
             alerta for alerta in alertas
             if alerta['tipo'] in ('Sem comunicação', 'Tinta vazia', 'Tinta baixa')
         ]
-        alertas_imediatos_ativos[:] = alertas_imediatos
-        botao_abrir_gestao.config(
-            state='normal' if alertas_imediatos else 'disabled'
-        )
+        alertas_por_iid.clear()
         if alertas_imediatos:
-            for alerta in alertas_imediatos:
+            estilos_alerta = {
+                'Sem comunicação': 'sem-comunicacao',
+                'Tinta vazia': 'tinta-vazia',
+                'Tinta baixa': 'tinta-baixa'
+            }
+            for indice, alerta in enumerate(alertas_imediatos):
+                iid = f'alerta-{indice}'
                 falhas_lista.insert(
+                    '',
                     tk.END,
-                    f"{alerta['tipo']} | Setor: {alerta['setor']} | "
-                    f"Máquina: {alerta['nome']} | IP: {alerta['ip']} | "
-                    f"Nome dispositivo: {alerta['nome_dispositivo']} | "
-                    f"Nº série: {alerta['numero_serie']} | MAC: {alerta.get('mac', '-')}"
+                    iid=iid,
+                    values=(
+                        alerta['tipo'],
+                        alerta['setor'],
+                        alerta['nome'],
+                        alerta['ip'],
+                        alerta['nome_dispositivo'],
+                        alerta['numero_serie'],
+                        alerta['modelo'],
+                        alerta.get('mac', '-')
+                    ),
+                    tags=(estilos_alerta[alerta['tipo']],)
                 )
-                indice = falhas_lista.size() - 1
-                cores = {
-                    'Sem comunicação': ('#fef2f2', '#991b1b'),
-                    'Tinta vazia': ('#fef2f2', '#991b1b'),
-                    'Tinta baixa': ('#fff7ed', '#9a3412')
-                }
-                fundo, texto = cores[alerta['tipo']]
-                falhas_lista.itemconfigure(indice, background=fundo, foreground=texto)
+                alertas_por_iid[iid] = alerta
         else:
-            falhas_lista.insert(tk.END, 'Nenhuma falha de comunicação nem alerta de tinta.')
+            falhas_lista.insert(
+                '',
+                tk.END,
+                values=('Nenhuma falha ou alerta de tinta.', '', '', '', '', '', '', '')
+            )
         falhas = sum(not item.get('status', '').startswith('Sucesso') for item in resultados)
         status_var.set(
             f'Consulta concluída: {len(resultados) - falhas}/{len(resultados)} equipamentos consultados. '

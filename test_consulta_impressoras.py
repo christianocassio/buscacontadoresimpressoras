@@ -39,6 +39,22 @@ HTML_CONTADORES = """
 
 
 class ConsultaImpressorasTests(unittest.TestCase):
+    def test_informacoes_de_versao_mostram_data_de_modificacao_do_executavel(self):
+        with tempfile.TemporaryDirectory() as diretorio:
+            executavel = Path(diretorio) / "ConsultaImpressoras.exe"
+            executavel.touch()
+            with (
+                patch.object(app.sys, "frozen", True, create=True),
+                patch.object(app.sys, "executable", str(executavel))
+            ):
+                informacoes = app.texto_versao_aplicativo()
+
+        self.assertRegex(
+            informacoes,
+            rf"v{app.APP_VERSION} \|\s+\d{{2}}/\d{{2}}/\d{{4}} \d{{2}}:\d{{2}}"
+        )
+        self.assertIn(f"Desenvolvedor: {app.APP_DEVELOPER}", informacoes)
+
     def test_lista_rejeita_ips_duplicados(self):
         impressoras = [
             {"nome": "A", "setor": "TI", "host": "IMP-A", "ip": "10.0.0.1"},
@@ -47,6 +63,35 @@ class ConsultaImpressorasTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "cadastrado mais de uma vez"):
             app.validar_lista_impressoras(impressoras)
+
+    def test_lista_preserva_numero_de_serie_e_adiciona_campo_vazio_em_cadastros_antigos(self):
+        lista = app.validar_lista_impressoras([
+            {
+                "nome": "A", "setor": "TI", "host": "IMP-A",
+                "ip": "10.0.0.1", "numero_serie": " SN-123 "
+            },
+            {"nome": "B", "setor": "RH", "host": "IMP-B", "ip": "10.0.0.2"},
+        ])
+
+        self.assertEqual(lista[0]["numero_serie"], "SN-123")
+        self.assertEqual(lista[1]["numero_serie"], "")
+
+    def test_atualiza_numero_de_serie_cadastrado_sem_apagar_valor_existente(self):
+        config = {
+            "impressoras": [
+                {"ip": "10.0.0.1", "numero_serie": ""},
+                {"ip": "10.0.0.2", "numero_serie": "SN-MANUAL"},
+            ]
+        }
+
+        alterou = app.atualizar_seriais_cadastrados(config, [
+            {"ip": "10.0.0.1", "numero_serie": "SN-AUTO"},
+            {"ip": "10.0.0.2", "numero_serie": "-"},
+        ])
+
+        self.assertTrue(alterou)
+        self.assertEqual(config["impressoras"][0]["numero_serie"], "SN-AUTO")
+        self.assertEqual(config["impressoras"][1]["numero_serie"], "SN-MANUAL")
 
     def test_configuracao_preserva_contatos_configurados_e_remove_limite_de_papel(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:
@@ -163,7 +208,11 @@ class ConsultaImpressorasTests(unittest.TestCase):
     def test_consulta_usa_lista_configurada_e_atualiza_progresso(self):
         lista = [
             {"nome": "Impressora 01", "setor": "Setor 01", "host": "PRINTER-01", "ip": "192.0.2.220"},
-            {"nome": "Impressora 02", "setor": "Setor 02", "host": "PRINTER-02", "ip": "192.0.2.221"},
+            {
+                "nome": "Impressora 02", "setor": "Setor 02",
+                "host": "PRINTER-02", "ip": "192.0.2.221",
+                "numero_serie": "SN-OFFLINE-2"
+            },
         ]
         progresso = []
 
@@ -204,6 +253,7 @@ class ConsultaImpressorasTests(unittest.TestCase):
         )
         self.assertTrue(resultados[1]["status"].startswith("Falha de comunicação"))
         self.assertEqual(resultados[1]["setor"], "Setor 02")
+        self.assertEqual(resultados[1]["numero_serie"], "SN-OFFLINE-2")
         self.assertEqual(progresso, [(1, 2, "Impressora 01"), (2, 2, "Impressora 02")])
 
     def test_whatsapp_inclui_localizacao_e_contadores_sem_alerta_de_tinta(self):
@@ -317,11 +367,12 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertIn('<th scope="col"', corpo)
         self.assertLess(corpo.index("Setor físico"), corpo.index("Hostname"))
         self.assertLess(corpo.index("Hostname"), corpo.index(">IP<"))
-        self.assertLess(corpo.index("Número total de páginas"), corpo.index("Nome do dispositivo"))
+        self.assertLess(corpo.index(">IP<"), corpo.index(">Nome do dispositivo<"))
+        self.assertLess(corpo.index(">Número de série<"), corpo.index(">MAC<"))
+        self.assertLess(corpo.index(">MAC<"), corpo.index(">Número total de páginas<"))
         self.assertLess(corpo.index("Impressão em 1 face"), corpo.index("Tinta preta"))
-        self.assertLess(corpo.index("Tinta preta"), corpo.index("Nome do dispositivo"))
         self.assertEqual(corpo.count(">Tinta preta<"), 1)
-        self.assertNotIn(">Identificação<", corpo)
+        self.assertIn(">Identificação<", corpo)
         self.assertEqual(corpo.count('<tr class="linha-impressora">'), 1)
         self.assertIn('overflow-x:auto', corpo)
         self.assertIn('min-width:2400px', corpo)
@@ -417,10 +468,11 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertEqual(linha["Nome do dispositivo"], "EPSONTEST01")
         self.assertEqual(linha["Número de série"], "SNTEST12345")
         self.assertEqual(linha["Total geral"], "11407")
-        self.assertEqual(colunas[:8], [
-            "Setor físico", "Hostname", "IP", "Total geral", "Total P&B",
-            "Total cor", "Total 2 faces", "Total 1 face"
+        self.assertEqual(colunas[:9], [
+            "Setor físico", "Hostname", "IP", "Identificação",
+            "Nome do dispositivo", "Número de série", "Modelo", "MAC", "Firmware"
         ])
+        self.assertEqual(colunas[9], "Total geral")
 
     def test_relatorio_destaca_setor_e_ip(self):
         item = {
