@@ -67,14 +67,39 @@ class ConsultaImpressorasTests(unittest.TestCase):
     def test_lista_preserva_numero_de_serie_e_adiciona_campo_vazio_em_cadastros_antigos(self):
         lista = app.validar_lista_impressoras([
             {
-                "nome": "A", "setor": "TI", "host": "IMP-A",
+                "nome": "Impressora Pulmão", "setor": "TI", "host": "IMP-A",
                 "ip": "10.0.0.1", "numero_serie": " SN-123 "
             },
             {"nome": "B", "setor": "RH", "host": "IMP-B", "ip": "10.0.0.2"},
+            {
+                "nome": "Outro Pulmão", "setor": "TI", "host": "IMP-C",
+                "ip": "10.0.0.3", "tipo_conexao": "CABO"
+            },
         ])
 
         self.assertEqual(lista[0]["numero_serie"], "SN-123")
         self.assertEqual(lista[1]["numero_serie"], "")
+        self.assertEqual(lista[0]["tipo_conexao"], "USB")
+        self.assertEqual(lista[1]["tipo_conexao"], "CABO")
+        self.assertEqual(lista[2]["tipo_conexao"], "CABO")
+
+    def test_tipo_conexao_aceita_apenas_opcoes_fixas(self):
+        impressora = {
+            "nome": "Impressora WiFi",
+            "setor": "TI",
+            "host": "IMP-WIFI",
+            "ip": "10.0.0.1",
+            "tipo_conexao": "wifi",
+        }
+
+        validada = app.validar_lista_impressoras([impressora])
+
+        self.assertEqual(validada[0]["tipo_conexao"], "WIFI")
+        self.assertEqual(app.TIPOS_CONEXAO, ("USB", "CABO", "WIFI"))
+        with self.assertRaisesRegex(ValueError, "Tipo de conexão inválido"):
+            app.validar_lista_impressoras([
+                {**impressora, "tipo_conexao": "BLUETOOTH"}
+            ])
 
     def test_atualiza_numero_de_serie_cadastrado_sem_apagar_valor_existente(self):
         config = {
@@ -130,6 +155,7 @@ class ConsultaImpressorasTests(unittest.TestCase):
             self.assertEqual(config["whatsapp_padrao"], "")
             self.assertEqual(config["faixa_rede_corporativa"], "192.0.2.0/24")
             self.assertEqual(config["impressoras"][0]["ip"], "192.0.2.220")
+            self.assertEqual(config["impressoras"][0]["tipo_conexao"], "CABO")
             self.assertTrue(caminho.exists())
 
     def test_whatsapp_abre_conversa_para_cada_numero(self):

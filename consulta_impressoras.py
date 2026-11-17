@@ -50,9 +50,10 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
+TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
 
 
 def texto_versao_aplicativo():
@@ -63,6 +64,15 @@ def texto_versao_aplicativo():
     else:
         build = "código-fonte"
     return f"v{APP_VERSION} | {build} | Desenvolvedor: {APP_DEVELOPER}"
+
+
+def tipo_conexao_padrao(nome):
+    nome_normalizado = unicodedata.normalize("NFKD", str(nome))
+    nome_normalizado = ''.join(
+        caractere for caractere in nome_normalizado
+        if not unicodedata.combining(caractere)
+    ).casefold()
+    return "USB" if "pulmao" in nome_normalizado else "CABO"
 
 
 def caminho_recurso(nome):
@@ -144,12 +154,24 @@ def validar_lista_impressoras(lista):
         host = item.get("host")
         ip = item.get("ip")
         numero_serie = item.get("numero_serie", "")
+        tipo_conexao = item.get("tipo_conexao")
         if not all(isinstance(valor, str) and valor.strip() for valor in (nome, setor, host, ip)):
             raise ValueError(
                 f"Preencha identificação, setor, hostname e IP da impressora {indice}."
             )
         if not isinstance(numero_serie, str):
             raise ValueError(f"O número de série da impressora {indice} deve ser texto.")
+        if tipo_conexao is None or (
+            isinstance(tipo_conexao, str) and not tipo_conexao.strip()
+        ):
+            tipo_conexao = tipo_conexao_padrao(nome)
+        elif isinstance(tipo_conexao, str):
+            tipo_conexao = tipo_conexao.strip().upper()
+        if tipo_conexao not in TIPOS_CONEXAO:
+            raise ValueError(
+                f"Tipo de conexão inválido na impressora {indice}. "
+                f"Use: {', '.join(TIPOS_CONEXAO)}."
+            )
         try:
             endereco = ipaddress.ip_address(ip.strip())
         except ValueError as exc:
@@ -166,7 +188,8 @@ def validar_lista_impressoras(lista):
             "setor": setor.strip(),
             "host": host.strip(),
             "ip": ip_normalizado,
-            "numero_serie": numero_serie.strip()
+            "numero_serie": numero_serie.strip(),
+            "tipo_conexao": tipo_conexao
         })
 
     return impressoras_validadas
@@ -1662,14 +1685,17 @@ def construir_interface(config, caminho_config):
         janela.rowconfigure(0, weight=1)
 
         lista_editada = [dict(item) for item in config['impressoras']]
-        colunas = ('nome', 'setor', 'host', 'ip', 'numero_serie')
+        colunas = (
+            'nome', 'setor', 'host', 'ip', 'numero_serie', 'tipo_conexao'
+        )
         tabela = ttk.Treeview(janela, columns=colunas, show='headings', selectmode='browse')
         for coluna, titulo, largura in (
             ('nome', 'Identificação', 150),
             ('setor', 'Setor físico', 150),
             ('host', 'Hostname', 170),
             ('ip', 'IP', 130),
-            ('numero_serie', 'Número de série', 170)
+            ('numero_serie', 'Número de série', 170),
+            ('tipo_conexao', 'Tipo Conexão', 110)
         ):
             tabela.heading(coluna, text=titulo)
             tabela.column(coluna, width=largura, anchor='w')
@@ -1692,17 +1718,19 @@ def construir_interface(config, caminho_config):
                         item['setor'],
                         item['host'],
                         item['ip'],
-                        item.get('numero_serie') or '-'
+                        item.get('numero_serie') or '-',
+                        item['tipo_conexao']
                     )
                 )
 
         def editar_impressora(indice=None):
             registro = lista_editada[indice] if indice is not None else {
-                'nome': '', 'setor': '', 'host': '', 'ip': '', 'numero_serie': ''
+                'nome': '', 'setor': '', 'host': '', 'ip': '',
+                'numero_serie': '', 'tipo_conexao': 'CABO'
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
-            formulario.geometry('480x350')
+            formulario.geometry('480x390')
             formulario.resizable(False, False)
             formulario.transient(janela)
             formulario.grab_set()
@@ -1715,16 +1743,62 @@ def construir_interface(config, caminho_config):
                 ('Número de Série', 'numero_serie')
             )
             variaveis = {}
+            entradas = {}
             for linha, (rotulo, chave) in enumerate(campos):
                 tk.Label(formulario, text=rotulo, font=('Arial', 10, 'bold')).grid(
                     row=linha, column=0, sticky='w', padx=16, pady=(12 if linha == 0 else 6, 3)
                 )
                 variavel = tk.StringVar(value=registro.get(chave, ''))
                 variaveis[chave] = variavel
-                tk.Entry(formulario, textvariable=variavel, font=('Arial', 10), width=40).grid(
+                entrada = tk.Entry(formulario, textvariable=variavel, font=('Arial', 10), width=40)
+                entrada.grid(
                     row=linha, column=1, sticky='ew', padx=(8, 16), pady=(12 if linha == 0 else 6, 3)
                 )
+                entradas[chave] = entrada
             formulario.columnconfigure(1, weight=1)
+            variaveis['tipo_conexao'] = tk.StringVar(
+                value=registro.get('tipo_conexao')
+                or tipo_conexao_padrao(registro.get('nome', ''))
+            )
+            linha_conexao = len(campos)
+            tk.Label(
+                formulario,
+                text='Tipo Conexão:',
+                font=('Arial', 10, 'bold')
+            ).grid(row=linha_conexao, column=0, sticky='w', padx=16, pady=6)
+            combo_tipo_conexao = ttk.Combobox(
+                formulario,
+                textvariable=variaveis['tipo_conexao'],
+                values=TIPOS_CONEXAO,
+                state='readonly',
+                width=37
+            )
+            combo_tipo_conexao.grid(
+                row=linha_conexao,
+                column=1,
+                sticky='ew',
+                padx=(8, 16),
+                pady=6
+            )
+            conexao_escolhida = {
+                'manualmente': (
+                    registro.get('tipo_conexao')
+                    != tipo_conexao_padrao(registro.get('nome', ''))
+                )
+            }
+
+            def atualizar_tipo_sugerido(_event=None):
+                if not conexao_escolhida['manualmente']:
+                    variaveis['tipo_conexao'].set(
+                        tipo_conexao_padrao(variaveis['nome'].get())
+                    )
+
+            combo_tipo_conexao.bind(
+                '<<ComboboxSelected>>',
+                lambda _event: conexao_escolhida.update(manualmente=True),
+                add='+'
+            )
+            entradas['nome'].bind('<KeyRelease>', atualizar_tipo_sugerido, add='+')
 
             def salvar_impressora():
                 nova_impressora = {
@@ -1754,7 +1828,7 @@ def construir_interface(config, caminho_config):
                 relief='flat',
                 padx=16,
                 pady=7
-            ).grid(row=len(campos), column=0, columnspan=2, pady=18)
+            ).grid(row=len(campos) + 1, column=0, columnspan=2, pady=14)
 
         def adicionar_impressora():
             editar_impressora()

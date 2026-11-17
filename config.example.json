@@ -9,63 +9,72 @@
             "setor": "Setor 01",
             "ip": "192.0.2.220",
             "host": "PRINTER-01",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 02",
             "setor": "Setor 02",
             "ip": "192.0.2.221",
             "host": "PRINTER-02",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 03",
             "setor": "Setor 03",
             "ip": "192.0.2.222",
             "host": "PRINTER-03",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 04",
             "setor": "Setor 04",
             "ip": "192.0.2.223",
             "host": "PRINTER-04",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 05",
             "setor": "Setor 05",
             "ip": "192.0.2.224",
             "host": "PRINTER-05",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 06",
             "setor": "Setor 06",
             "ip": "192.0.2.225",
             "host": "PRINTER-06",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 07",
             "setor": "Setor 07",
             "ip": "192.0.2.226",
             "host": "PRINTER-07",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 08",
             "setor": "Setor 08",
             "ip": "192.0.2.227",
             "host": "PRINTER-08",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         },
         {
             "nome": "Impressora 09",
             "setor": "Setor 09",
             "ip": "192.0.2.228",
             "host": "PRINTER-09",
-            "numero_serie": ""
+            "numero_serie": "",
+            "tipo_conexao": "CABO"
         }
     ]
 }
