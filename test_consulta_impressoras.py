@@ -126,6 +126,22 @@ class ConsultaImpressorasTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     app.validar_lista_impressoras([{**usb, campo: valor}])
 
+    def test_lista_preserva_ultimas_leituras_de_impressoras_de_rede(self):
+        cabo = {
+            "nome": "Expedição", "setor": "Expedição", "host": "IMP-EXP-01",
+            "ip": "10.0.0.1", "tipo_conexao": "CABO",
+            "total_geral_consultado": "11407", "tinta_preto_consultada": "45%"
+        }
+
+        validada = app.validar_lista_impressoras([cabo])[0]
+
+        self.assertEqual(validada["total_geral_consultado"], "11407")
+        self.assertEqual(validada["tinta_preto_consultada"], "45%")
+        with self.assertRaisesRegex(ValueError, "contador de páginas"):
+            app.validar_lista_impressoras([{
+                **cabo, "total_geral_consultado": "muitos"
+            }])
+
     def test_lista_impressoras_usb_com_dados_manualmente_pendentes(self):
         pendentes = app.impressoras_usb_pendentes([
             {
@@ -341,6 +357,52 @@ Adaptador Ethernet Ethernet:
         self.assertTrue(alterou)
         self.assertEqual(config["impressoras"][0]["numero_serie"], "")
         self.assertEqual(config["impressoras"][0]["mac"], "02:00:00:00:00:02")
+
+    def test_atualiza_leituras_de_cabo_por_mac_sem_alterar_valores_usb(self):
+        config = {
+            "impressoras": [
+                {
+                    "nome": "Expedição", "host": "IMP-EXP-01",
+                    "ip": "10.0.0.99", "tipo_conexao": "CABO",
+                    "mac": "02:00:00:00:00:01",
+                    "total_geral_consultado": "-", "tinta_preto_consultada": "-"
+                },
+                {
+                    "nome": "Pulmão", "host": "IMP-USB",
+                    "ip": "10.0.0.2", "tipo_conexao": "USB",
+                    "total_geral_manual": "5555", "tinta_preto_manual": "45%",
+                    "total_geral_consultado": "-", "tinta_preto_consultada": "-"
+                },
+            ]
+        }
+
+        alterou = app.atualizar_leituras_cadastradas(config, [{
+            "ip": "10.0.0.1", "mac": "02-00-00-00-00-01",
+            "total_geral": "11407", "tinta_preto": "80%"
+        }])
+
+        self.assertTrue(alterou)
+        cabo, usb = config["impressoras"]
+        self.assertEqual(cabo["total_geral_consultado"], "11407")
+        self.assertEqual(cabo["tinta_preto_consultada"], "80%")
+        self.assertEqual(usb["total_geral_manual"], "5555")
+        self.assertEqual(usb["tinta_preto_manual"], "45%")
+        self.assertEqual(
+            app.valores_contadores_cadastrados(cabo), ("11407", "80%")
+        )
+        self.assertEqual(
+            app.valores_contadores_cadastrados(usb), ("5555", "45%")
+        )
+
+    def test_painel_de_alertas_exibe_hostname_na_quinta_coluna(self):
+        valores = app.valores_linha_alerta_painel({
+            "tipo": "Sem comunicação", "setor": "Expedição",
+            "nome": "Expedição", "ip": "10.0.0.1", "host": "IMP-EXP-01",
+            "nome_dispositivo": "-", "numero_serie": "SN-123", "modelo": "WF-X",
+            "mac": "-"
+        })
+
+        self.assertEqual(valores[4], "IMP-EXP-01")
 
     def test_configuracao_preserva_contatos_configurados_e_remove_limite_de_papel(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:

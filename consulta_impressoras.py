@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.13"
+APP_VERSION = "1.0.14"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -185,6 +185,8 @@ def validar_lista_impressoras(lista):
         mac = item.get("mac", "")
         total_geral_manual = item.get("total_geral_manual", "")
         tinta_preto_manual = item.get("tinta_preto_manual", "")
+        total_geral_consultado = item.get("total_geral_consultado", "-")
+        tinta_preto_consultada = item.get("tinta_preto_consultada", "-")
         tipo_conexao = item.get("tipo_conexao")
         if not all(isinstance(valor, str) and valor.strip() for valor in (nome, setor, host, ip)):
             raise ValueError(
@@ -217,6 +219,27 @@ def validar_lista_impressoras(lista):
                     f"O nível de tinta manual da impressora {indice} deve estar entre 0 e 100%."
                 )
             tinta_preto_manual = f"{int(tinta_preto_manual)}%"
+        if not isinstance(total_geral_consultado, str):
+            raise ValueError(
+                f"O contador de páginas consultado da impressora {indice} deve ser texto."
+            )
+        total_geral_consultado = total_geral_consultado.strip()
+        if total_geral_consultado in ("", "--", "None", "null"):
+            total_geral_consultado = "-"
+        if total_geral_consultado != "-" and not re.fullmatch(
+            r"\d+", total_geral_consultado
+        ):
+            raise ValueError(
+                f"O contador de páginas consultado da impressora {indice} "
+                "deve conter apenas números."
+            )
+        if not isinstance(tinta_preto_consultada, str):
+            raise ValueError(
+                f"O nível de tinta consultado da impressora {indice} deve ser texto."
+            )
+        tinta_preto_consultada = tinta_preto_consultada.strip()
+        if tinta_preto_consultada in ("", "--", "None", "null"):
+            tinta_preto_consultada = "-"
         if tipo_conexao is None or (
             isinstance(tipo_conexao, str) and not tipo_conexao.strip()
         ):
@@ -248,10 +271,28 @@ def validar_lista_impressoras(lista):
             "mac": mac_normalizado,
             "tipo_conexao": tipo_conexao,
             "total_geral_manual": total_geral_manual,
-            "tinta_preto_manual": tinta_preto_manual
+            "tinta_preto_manual": tinta_preto_manual,
+            "total_geral_consultado": total_geral_consultado,
+            "tinta_preto_consultada": tinta_preto_consultada
         })
 
     return impressoras_validadas
+
+
+def valores_contadores_cadastrados(impressora):
+    tipo_conexao = str(
+        impressora.get("tipo_conexao")
+        or tipo_conexao_padrao(impressora.get("nome", ""))
+    ).strip().upper()
+    if tipo_conexao == "USB":
+        return (
+            limpar_texto(impressora.get("total_geral_manual")),
+            limpar_texto(impressora.get("tinta_preto_manual")),
+        )
+    return (
+        limpar_texto(impressora.get("total_geral_consultado")),
+        limpar_texto(impressora.get("tinta_preto_consultada")),
+    )
 
 
 def atualizar_seriais_cadastrados(config, resultados):
@@ -287,6 +328,43 @@ def atualizar_seriais_cadastrados(config, resultados):
             alterou = True
         if mac_encontrado and impressora.get('mac', '') != mac_encontrado:
             impressora['mac'] = mac_encontrado
+            alterou = True
+    return alterou
+
+
+def atualizar_leituras_cadastradas(config, resultados):
+    resultados_por_ip = {
+        limpar_texto(item.get("ip")): item
+        for item in resultados
+    }
+    resultados_por_mac = {
+        mac: item
+        for item in resultados
+        if (mac := normalizar_mac(item.get("mac")))
+    }
+    alterou = False
+    for impressora in config["impressoras"]:
+        tipo_conexao = str(
+            impressora.get("tipo_conexao")
+            or tipo_conexao_padrao(impressora.get("nome", ""))
+        ).strip().upper()
+        if tipo_conexao == "USB":
+            continue
+
+        mac_cadastrado = normalizar_mac(impressora.get("mac"))
+        resultado = resultados_por_mac.get(mac_cadastrado) if mac_cadastrado else None
+        if resultado is None:
+            resultado = resultados_por_ip.get(limpar_texto(impressora.get("ip")))
+        if resultado is None:
+            continue
+
+        total_geral = limpar_texto(resultado.get("total_geral"))
+        tinta_preto = limpar_texto(resultado.get("tinta_preto"))
+        if impressora.get("total_geral_consultado", "-") != total_geral:
+            impressora["total_geral_consultado"] = total_geral
+            alterou = True
+        if impressora.get("tinta_preto_consultada", "-") != tinta_preto:
+            impressora["tinta_preto_consultada"] = tinta_preto
             alterou = True
     return alterou
 
@@ -854,6 +932,19 @@ def gerar_alertas(resultados, limite_tinta=20):
         'Tinta baixa': 2
     }
     return sorted(alertas, key=lambda alerta: prioridade.get(alerta['tipo'], 4))
+
+
+def valores_linha_alerta_painel(alerta):
+    return (
+        alerta["tipo"],
+        alerta["setor"],
+        alerta["nome"],
+        alerta["ip"],
+        limpar_texto(alerta.get("host")),
+        alerta["numero_serie"],
+        alerta["modelo"],
+        limpar_texto(alerta.get("mac")),
+    )
 
 
 COLUNAS_TABELA_COMPLETA = (
@@ -1797,7 +1888,7 @@ def construir_interface(config, caminho_config):
     falhas_frame.grid(row=7, column=0, sticky='ew', pady=(0, 6))
     falhas_frame.columnconfigure(0, weight=1)
     colunas_alertas = (
-        'tipo', 'setor', 'nome', 'ip', 'nome_dispositivo',
+        'tipo', 'setor', 'nome', 'ip', 'host',
         'numero_serie', 'modelo', 'mac'
     )
     falhas_lista = ttk.Treeview(
@@ -1826,7 +1917,7 @@ def construir_interface(config, caminho_config):
         ('setor', 'Setor físico', 140),
         ('nome', 'Impressora', 150),
         ('ip', 'IP (clique para abrir)', 190),
-        ('nome_dispositivo', 'Nome do dispositivo', 160),
+        ('host', 'Hostname', 160),
         ('numero_serie', 'Número de série', 140),
         ('modelo', 'Modelo', 170),
         ('mac', 'MAC', 140)
@@ -2043,8 +2134,8 @@ def construir_interface(config, caminho_config):
             ('ip', 'IP', 130),
             ('numero_serie', 'Número de série', 170),
             ('tipo_conexao', 'Tipo Conexão', 110),
-            ('total_geral_manual', 'Páginas (USB)', 110),
-            ('tinta_preto_manual', 'Tinta (USB)', 100)
+            ('total_geral_manual', 'Número de páginas', 130),
+            ('tinta_preto_manual', 'Tinta preta', 110)
         ):
             tabela.heading(coluna, text=titulo)
             tabela.column(coluna, width=largura, anchor='w')
@@ -2058,6 +2149,7 @@ def construir_interface(config, caminho_config):
             if itens_atuais:
                 tabela.delete(*itens_atuais)
             for indice, item in enumerate(lista_editada):
+                total_geral, tinta_preto = valores_contadores_cadastrados(item)
                 tabela.insert(
                     '',
                     tk.END,
@@ -2069,8 +2161,8 @@ def construir_interface(config, caminho_config):
                         item['ip'],
                         item.get('numero_serie') or '-',
                         item['tipo_conexao'],
-                        item.get('total_geral_manual') or '-',
-                        item.get('tinta_preto_manual') or '-'
+                        total_geral,
+                        tinta_preto
                     )
                 )
 
@@ -2078,7 +2170,8 @@ def construir_interface(config, caminho_config):
             registro = lista_editada[indice] if indice is not None else {
                 'nome': '', 'setor': '', 'host': '', 'ip': '',
                 'numero_serie': '', 'tipo_conexao': 'CABO',
-                'mac': '', 'total_geral_manual': '', 'tinta_preto_manual': ''
+                'mac': '', 'total_geral_manual': '', 'tinta_preto_manual': '',
+                'total_geral_consultado': '-', 'tinta_preto_consultada': '-'
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
@@ -2207,6 +2300,12 @@ def construir_interface(config, caminho_config):
                     nova_lista.append(nova_impressora)
                 else:
                     nova_lista[indice] = nova_impressora
+                nova_impressora['total_geral_consultado'] = registro.get(
+                    'total_geral_consultado', '-'
+                )
+                nova_impressora['tinta_preto_consultada'] = registro.get(
+                    'tinta_preto_consultada', '-'
+                )
                 try:
                     lista_validada = validar_lista_impressoras(nova_lista)
                 except ValueError as exc:
@@ -2494,14 +2593,19 @@ def construir_interface(config, caminho_config):
     def consulta_concluida(resultados, data_consulta, caminho_html, caminho_csv):
         consultando['ativo'] = False
         botao_atualizar.config(state='normal')
-        if atualizar_seriais_cadastrados(config, resultados):
+        cadastro_alterado = atualizar_seriais_cadastrados(config, resultados)
+        cadastro_alterado = (
+            atualizar_leituras_cadastradas(config, resultados)
+            or cadastro_alterado
+        )
+        if cadastro_alterado:
             try:
                 salvar_config(config, caminho_config)
             except OSError as exc:
                 messagebox.showwarning(
-                    'Número de série detectado',
-                    f'O número de série foi encontrado, mas não foi possível salvar '
-                    f'o cadastro: {exc}',
+                    'Dados de impressora detectados',
+                    f'Os dados da consulta foram atualizados, mas não foi possível '
+                    f'salvar o cadastro: {exc}',
                     parent=root
                 )
         dados.update({
@@ -2531,16 +2635,7 @@ def construir_interface(config, caminho_config):
                     '',
                     tk.END,
                     iid=iid,
-                    values=(
-                        alerta['tipo'],
-                        alerta['setor'],
-                        alerta['nome'],
-                        alerta['ip'],
-                        alerta['nome_dispositivo'],
-                        alerta['numero_serie'],
-                        alerta['modelo'],
-                        alerta.get('mac', '-')
-                    ),
+                    values=valores_linha_alerta_painel(alerta),
                     tags=(estilos_alerta[alerta['tipo']],)
                 )
                 alertas_por_iid[iid] = alerta
