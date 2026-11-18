@@ -27,6 +27,14 @@ HTML_REDE = """
 </table></body></html>
 """
 
+HTML_REDE_COM_SERIE = """
+<html><body><table>
+<tr><th>Nome do dispositivo</th><td>EPSONTEST02</td></tr>
+<tr><th>Serial Number</th><td>XC75056433</td></tr>
+<tr><th>MAC Address</th><td>02-00-00-00-00-02</td></tr>
+</table></body></html>
+"""
+
 HTML_CONTADORES = """
 <html><body><dl>
 <dt><span>Número total de páginas&nbsp;:</span></dt><dd><div>11407</div></dd>
@@ -84,6 +92,18 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertEqual(lista[0]["tipo_conexao"], "USB")
         self.assertEqual(lista[1]["tipo_conexao"], "CABO")
         self.assertEqual(lista[2]["tipo_conexao"], "CABO")
+
+    def test_lista_normaliza_e_valida_mac_de_dispositivo(self):
+        impressora = {
+            "nome": "Impressora", "setor": "TI", "host": "IMP-01",
+            "ip": "10.0.0.1", "mac": "02-00-00-00-00-01"
+        }
+
+        validada = app.validar_lista_impressoras([impressora])
+
+        self.assertEqual(validada[0]["mac"], "02:00:00:00:00:01")
+        with self.assertRaisesRegex(ValueError, "Endereço MAC inválido"):
+            app.validar_lista_impressoras([{**impressora, "mac": "não é um MAC"}])
 
     def test_lista_preserva_contadores_manuais_usb_e_valida_limites(self):
         usb = {
@@ -238,6 +258,48 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertEqual(config["impressoras"][0]["numero_serie"], "SN-AUTO")
         self.assertEqual(config["impressoras"][1]["numero_serie"], "SN-MANUAL")
 
+    def test_salva_serial_e_mac_e_preserva_associacao_quando_o_ip_muda(self):
+        config = {
+            "impressoras": [{
+                "ip": "10.0.0.1", "numero_serie": "", "mac": ""
+            }]
+        }
+
+        alterou = app.atualizar_seriais_cadastrados(config, [{
+            "ip": "10.0.0.1", "numero_serie": "SN-LIVE",
+            "mac": "02-00-00-00-00-01"
+        }])
+
+        self.assertTrue(alterou)
+        self.assertEqual(config["impressoras"][0]["numero_serie"], "SN-LIVE")
+        self.assertEqual(config["impressoras"][0]["mac"], "02:00:00:00:00:01")
+
+        config["impressoras"][0]["ip"] = "10.0.0.99"
+        alterou = app.atualizar_seriais_cadastrados(config, [{
+            "ip": "10.0.0.99", "numero_serie": "-",
+            "mac": "02:00:00:00:00:01"
+        }])
+
+        self.assertFalse(alterou)
+        self.assertEqual(config["impressoras"][0]["numero_serie"], "SN-LIVE")
+
+    def test_limpa_serial_antigo_se_o_mac_confirmar_outro_dispositivo(self):
+        config = {
+            "impressoras": [{
+                "ip": "10.0.0.1", "numero_serie": "SN-ANTIGO",
+                "mac": "02:00:00:00:00:01"
+            }]
+        }
+
+        alterou = app.atualizar_seriais_cadastrados(config, [{
+            "ip": "10.0.0.1", "numero_serie": "-",
+            "mac": "02:00:00:00:00:02"
+        }])
+
+        self.assertTrue(alterou)
+        self.assertEqual(config["impressoras"][0]["numero_serie"], "")
+        self.assertEqual(config["impressoras"][0]["mac"], "02:00:00:00:00:02")
+
     def test_configuracao_preserva_contatos_configurados_e_remove_limite_de_papel(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:
             pasta_dados = Path(pasta_temporaria)
@@ -350,6 +412,48 @@ class ConsultaImpressorasTests(unittest.TestCase):
 
         self.assertEqual(identificacao["nome_dispositivo"], "EPSONTEST01")
         self.assertEqual(estado["numero_serie"], "SNTEST12345")
+
+    def test_extrai_serial_e_mac_de_rotulos_em_tabela(self):
+        identificacao = app.extrair_identificacao_dispositivo(HTML_REDE_COM_SERIE)
+
+        self.assertEqual(identificacao["nome_dispositivo"], "EPSONTEST02")
+        self.assertEqual(identificacao["numero_serie"], "XC75056433")
+        self.assertEqual(identificacao["mac"], "02:00:00:00:00:02")
+
+    def test_consulta_procura_serial_na_pagina_de_rede_quando_ausente_no_estado(self):
+        conteudo_estado = HTML_PRODUTO.replace(
+            "<dt>Número de série :</dt><dd>SNTEST12345</dd>\n", ""
+        ).replace(
+            "<dt>Endereço MAC da rede :</dt><dd>02:00:00:00:00:01</dd>\n", ""
+        )
+
+        class Resposta:
+            status_code = 200
+
+            def __init__(self, conteudo):
+                self.content = conteudo.encode("utf-8")
+
+        def fake_get(url, **kwargs):
+            if app.CAMINHO_ESTADO in url:
+                return Resposta(conteudo_estado)
+            if app.CAMINHO_CONTADOR in url:
+                return Resposta(HTML_CONTADORES)
+            if app.CAMINHO_REDE in url:
+                return Resposta(HTML_REDE_COM_SERIE)
+            self.fail(f"Endpoint inesperado na consulta: {url}")
+
+        with patch.object(app.requests, "get", side_effect=fake_get) as requisitar:
+            resultados = app.consultar_impressoras(lista_impressoras=[{
+                "nome": "Impressora 01", "setor": "TI",
+                "host": "IMP-01", "ip": "10.0.0.10"
+            }])
+
+        self.assertEqual(resultados[0]["numero_serie"], "XC75056433")
+        self.assertEqual(resultados[0]["mac"], "02:00:00:00:00:02")
+        self.assertTrue(any(
+            app.CAMINHO_REDE in chamada.args[0]
+            for chamada in requisitar.call_args_list
+        ))
 
     def test_consulta_usa_lista_configurada_e_atualiza_progresso(self):
         lista = [

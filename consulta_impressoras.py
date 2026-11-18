@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -86,6 +86,21 @@ def filtrar_impressoras_de_rede(lista_impressoras):
             or tipo_conexao_padrao(impressora.get("nome", ""))
         ).strip().upper() != "USB"
     ]
+
+
+def normalizar_mac(valor):
+    texto = str(valor or "").strip()
+    if not texto or texto.casefold() in ("-", "--", "none", "null"):
+        return ""
+    if not re.fullmatch(r"[0-9A-Fa-f:.-]+", texto):
+        return ""
+    octetos = re.sub(r"[-:.]", "", texto)
+    if not re.fullmatch(r"[0-9A-Fa-f]{12}", octetos):
+        return ""
+    return ":".join(
+        octetos[indice:indice + 2].upper()
+        for indice in range(0, 12, 2)
+    )
 
 
 def caminho_recurso(nome):
@@ -167,6 +182,7 @@ def validar_lista_impressoras(lista):
         host = item.get("host")
         ip = item.get("ip")
         numero_serie = item.get("numero_serie", "")
+        mac = item.get("mac", "")
         total_geral_manual = item.get("total_geral_manual", "")
         tinta_preto_manual = item.get("tinta_preto_manual", "")
         tipo_conexao = item.get("tipo_conexao")
@@ -176,6 +192,11 @@ def validar_lista_impressoras(lista):
             )
         if not isinstance(numero_serie, str):
             raise ValueError(f"O número de série da impressora {indice} deve ser texto.")
+        if not isinstance(mac, str):
+            raise ValueError(f"O endereço MAC da impressora {indice} deve ser texto.")
+        mac_normalizado = normalizar_mac(mac)
+        if mac.strip() and mac.strip() not in ("-", "--") and not mac_normalizado:
+            raise ValueError(f"Endereço MAC inválido na impressora {indice}: {mac}")
         if not isinstance(total_geral_manual, str):
             raise ValueError(
                 f"O número de páginas manual da impressora {indice} deve ser texto."
@@ -224,6 +245,7 @@ def validar_lista_impressoras(lista):
             "host": host.strip(),
             "ip": ip_normalizado,
             "numero_serie": numero_serie.strip(),
+            "mac": mac_normalizado,
             "tipo_conexao": tipo_conexao,
             "total_geral_manual": total_geral_manual,
             "tinta_preto_manual": tinta_preto_manual
@@ -233,16 +255,38 @@ def validar_lista_impressoras(lista):
 
 
 def atualizar_seriais_cadastrados(config, resultados):
-    seriais_por_ip = {
-        limpar_texto(item.get('ip')): limpar_texto(item.get('numero_serie'))
+    resultados_por_ip = {
+        limpar_texto(item.get('ip')): item
         for item in resultados
-        if limpar_texto(item.get('numero_serie')) != '-'
+    }
+    resultados_por_mac = {
+        mac: item
+        for item in resultados
+        if (mac := normalizar_mac(item.get('mac')))
     }
     alterou = False
     for impressora in config['impressoras']:
-        numero_serie = seriais_por_ip.get(impressora['ip'])
-        if numero_serie and impressora.get('numero_serie', '') != numero_serie:
+        mac_cadastrado = normalizar_mac(impressora.get('mac'))
+        resultado = resultados_por_mac.get(mac_cadastrado) if mac_cadastrado else None
+        if resultado is None:
+            resultado = resultados_por_ip.get(impressora['ip'])
+        if resultado is None:
+            continue
+
+        mac_encontrado = normalizar_mac(resultado.get('mac'))
+        numero_serie = limpar_texto(resultado.get('numero_serie'))
+        mac_diferente = (
+            mac_cadastrado and mac_encontrado and mac_cadastrado != mac_encontrado
+        )
+        if mac_diferente and numero_serie == '-':
+            if impressora.get('numero_serie'):
+                impressora['numero_serie'] = ''
+                alterou = True
+        elif numero_serie != '-' and impressora.get('numero_serie', '') != numero_serie:
             impressora['numero_serie'] = numero_serie
+            alterou = True
+        if mac_encontrado and impressora.get('mac', '') != mac_encontrado:
+            impressora['mac'] = mac_encontrado
             alterou = True
     return alterou
 
@@ -470,7 +514,11 @@ def extrair_identificacao_dispositivo(conteudo):
         conteudo if isinstance(conteudo, BeautifulSoup)
         else BeautifulSoup(conteudo, 'html.parser')
     )
-    dados = {'nome_dispositivo': '-', 'numero_serie': '-'}
+    dados = {
+        'nome_dispositivo': '-',
+        'numero_serie': '-',
+        'mac': '-'
+    }
 
     def registrar(rotulo, valor):
         rotulo_normalizado = unicodedata.normalize('NFKD', str(rotulo).casefold())
@@ -485,13 +533,20 @@ def extrair_identificacao_dispositivo(conteudo):
         elif rotulo_normalizado.startswith((
             'numero de serie', 'numero serie', 'n de serie', 'n o de serie',
             'n serie', 'no de serie',
-            'serial number', 'serial no'
-        )):
+            'serial number', 'serial no', 'serialnumber', 'serialno'
+        )) or rotulo_normalizado.startswith('serial '):
             chave = 'numero_serie'
+        elif rotulo_normalizado.startswith((
+            'endereco mac', 'mac address', 'macaddress', 'network mac', 'networkmac',
+            'mac'
+        )):
+            chave = 'mac'
         else:
             return
 
         valor_limpo = limpar_texto(valor)
+        if chave == 'mac':
+            valor_limpo = normalizar_mac(valor_limpo) or '-'
         if valor_limpo != '-' and dados[chave] == '-':
             dados[chave] = valor_limpo
 
@@ -507,6 +562,19 @@ def extrair_identificacao_dispositivo(conteudo):
                 celulas[indice].get_text(' ', strip=True),
                 celulas[indice + 1].get_text(' ', strip=True)
             )
+
+    for elemento in soup.find_all(True):
+        rotulo = ' '.join(
+            elemento.get(atributo, '')
+            for atributo in ('id', 'name', 'aria-label', 'title', 'data-label', 'alt')
+        )
+        valor = (
+            elemento.get('value')
+            or elemento.get('data-value')
+            or elemento.get_text(' ', strip=True)
+        )
+        if rotulo and valor:
+            registrar(rotulo, valor)
 
     linhas_texto = [
         linha.strip() for linha in soup.get_text('\n', strip=True).splitlines()
@@ -568,7 +636,7 @@ def extrair_estado_produto(html):
         'tamanho_papel': r'Tamanho do papel\s*[:：]\s*([^\n]+)',
         'tipo_papel': r'Tipo papel\s*[:：]\s*([^\n]+)',
         'firmware': r'Firmware\s*[:：]\s*([^\n]+)',
-        'mac': r'Endereço MAC da rede\s*[:：]\s*([0-9A-Fa-f:]{17})',
+        'mac': r'(?:Endereço\s+)?MAC(?:\s+da\s+rede)?\s*[:：]\s*([0-9A-Fa-f:.-]{12,17})',
         'data_hora': r'Data e Hora\s*[:：]\s*([^\n]+)',
         'epson_connect': r'Estado de Epson Connect\s*[:：]\s*([^\n]+)',
         'leitor_cartao': r'Status do leitor de cartão\s*[:：]\s*([^\n]+)'
@@ -577,7 +645,11 @@ def extrair_estado_produto(html):
     for chave, padrao in padroes.items():
         match = re.search(padrao, texto, re.IGNORECASE)
         if match:
-            dados[chave] = match.group(1).strip()
+            dados[chave] = (
+                normalizar_mac(match.group(1)) or '-'
+                if chave == 'mac'
+                else match.group(1).strip()
+            )
 
     dados['tinta_preto'] = extrair_nivel_tinta(soup, texto)
     dados.update(extrair_identificacao_dispositivo(soup))
@@ -1356,7 +1428,8 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                     'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
                     'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
                     'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
-                    'firmware': '-', 'mac': '-', 'nome_dispositivo': '-',
+                    'firmware': '-', 'mac': normalizar_mac(imp.get('mac')) or '-',
+                    'nome_dispositivo': '-',
                     'numero_serie': limpar_texto(imp.get('numero_serie')),
                     'data_hora': '-', 'epson_connect': '-',
                     'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
@@ -1367,7 +1440,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             dados_estado = extrair_estado_produto(resp_estado.content)
             dados_identificacao = {
                 chave: limpar_texto(dados_estado.get(chave))
-                for chave in ('nome_dispositivo', 'numero_serie')
+                for chave in ('nome_dispositivo', 'numero_serie', 'mac')
             }
             url_contador = f'https://{ip}{CAMINHO_CONTADOR}'
             resp_contador = requests.get(url_contador, timeout=8, verify=False)
@@ -1384,7 +1457,10 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             else:
                 avisos_parciais.append(f'contadores HTTP {resp_contador.status_code}')
 
-            if '-' in dados_identificacao.values():
+            if any(
+                dados_identificacao[chave] == '-'
+                for chave in ('nome_dispositivo', 'numero_serie', 'mac')
+            ):
                 url_rede = f'https://{ip}{CAMINHO_REDE}'
                 try:
                     resp_rede = requests.get(url_rede, timeout=4, verify=False)
@@ -1401,9 +1477,19 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                     avisos_parciais.append(f'consulta de identificação de rede falhou: {exc}')
 
             if dados_identificacao['numero_serie'] == '-':
-                dados_identificacao['numero_serie'] = limpar_texto(
-                    imp.get('numero_serie')
-                )
+                mac_cadastrado = normalizar_mac(imp.get('mac'))
+                mac_encontrado = normalizar_mac(dados_identificacao.get('mac'))
+                serial_cadastrado = limpar_texto(imp.get('numero_serie'))
+                if (
+                    serial_cadastrado != '-'
+                    and not (
+                        mac_cadastrado and mac_encontrado
+                        and mac_cadastrado != mac_encontrado
+                    )
+                ):
+                    dados_identificacao['numero_serie'] = serial_cadastrado
+            if dados_identificacao['mac'] == '-':
+                dados_identificacao['mac'] = normalizar_mac(imp.get('mac')) or '-'
             identificacao_ausente = [
                 rotulo
                 for chave, rotulo in (
@@ -1442,7 +1528,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'tamanho_papel': limpar_texto(dados_estado.get('tamanho_papel')),
                 'tipo_papel': limpar_texto(dados_estado.get('tipo_papel')),
                 'firmware': limpar_texto(dados_estado.get('firmware')),
-                'mac': limpar_texto(dados_estado.get('mac')),
+                'mac': dados_identificacao['mac'],
                 'data_hora': limpar_texto(dados_estado.get('data_hora')),
                 'epson_connect': limpar_texto(dados_estado.get('epson_connect')),
                 'leitor_cartao': limpar_texto(dados_estado.get('leitor_cartao')),
@@ -1465,7 +1551,8 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
                 'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
                 'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
-                'firmware': '-', 'mac': '-', 'nome_dispositivo': '-',
+                'firmware': '-', 'mac': normalizar_mac(imp.get('mac')) or '-',
+                'nome_dispositivo': '-',
                 'numero_serie': limpar_texto(imp.get('numero_serie')),
                 'data_hora': '-', 'epson_connect': '-',
                 'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
@@ -1896,7 +1983,7 @@ def construir_interface(config, caminho_config):
             registro = lista_editada[indice] if indice is not None else {
                 'nome': '', 'setor': '', 'host': '', 'ip': '',
                 'numero_serie': '', 'tipo_conexao': 'CABO',
-                'total_geral_manual': '', 'tinta_preto_manual': ''
+                'mac': '', 'total_geral_manual': '', 'tinta_preto_manual': ''
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
@@ -2019,6 +2106,7 @@ def construir_interface(config, caminho_config):
                     chave: variavel.get().strip()
                     for chave, variavel in variaveis.items()
                 }
+                nova_impressora['mac'] = registro.get('mac', '')
                 nova_lista = [dict(item) for item in lista_editada]
                 if indice is None:
                     nova_lista.append(nova_impressora)
