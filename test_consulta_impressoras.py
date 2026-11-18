@@ -79,9 +79,32 @@ class ConsultaImpressorasTests(unittest.TestCase):
 
         self.assertEqual(lista[0]["numero_serie"], "SN-123")
         self.assertEqual(lista[1]["numero_serie"], "")
+        self.assertEqual(lista[1]["total_geral_manual"], "")
+        self.assertEqual(lista[1]["tinta_preto_manual"], "")
         self.assertEqual(lista[0]["tipo_conexao"], "USB")
         self.assertEqual(lista[1]["tipo_conexao"], "CABO")
         self.assertEqual(lista[2]["tipo_conexao"], "CABO")
+
+    def test_lista_preserva_contadores_manuais_usb_e_valida_limites(self):
+        usb = {
+            "nome": "Pulmão", "setor": "Produção", "host": "IMP-USB",
+            "ip": "198.51.100.220", "tipo_conexao": "USB",
+            "total_geral_manual": " 1450 ", "tinta_preto_manual": " 80 % "
+        }
+
+        validada = app.validar_lista_impressoras([usb])[0]
+
+        self.assertEqual(validada["total_geral_manual"], "1450")
+        self.assertEqual(validada["tinta_preto_manual"], "80%")
+        for campo, valor in (
+            ("total_geral_manual", "-1"),
+            ("total_geral_manual", "1.5"),
+            ("tinta_preto_manual", "101"),
+            ("tinta_preto_manual", "baixo"),
+        ):
+            with self.subTest(campo=campo, valor=valor):
+                with self.assertRaises(ValueError):
+                    app.validar_lista_impressoras([{**usb, campo: valor}])
 
     def test_tipo_conexao_aceita_apenas_opcoes_fixas(self):
         impressora = {
@@ -130,6 +153,73 @@ class ConsultaImpressorasTests(unittest.TestCase):
         self.assertEqual(ips, [])
         self.assertFalse(dentro_da_faixa)
         obter_ips.assert_not_called()
+
+    def test_faixa_de_exemplo_reconhece_subrede_ativa_do_windows(self):
+        ip_local = ["10.2.200.44"]
+        rede_ativa = [app.ipaddress.ip_network("10.2.200.0/24")]
+        cabo = {
+            "nome": "Impressora de rede", "ip": "10.2.200.80",
+            "tipo_conexao": "CABO"
+        }
+        with (
+            patch.object(app, "obter_ips_de_rota", return_value=ip_local),
+            patch.object(app, "obter_faixas_de_rede_locais", return_value=rede_ativa) as obter_redes
+        ):
+            ips, dentro_da_faixa = app.verificar_rede_corporativa(
+                app.FAIXA_REDE_EXEMPLO, [cabo]
+            )
+
+        self.assertEqual(ips, ip_local)
+        self.assertTrue(dentro_da_faixa)
+        obter_redes.assert_called_once_with(ip_local)
+
+    def test_detecta_prefixo_apenas_dos_adaptadores_que_roteam_para_impressora(self):
+        saida_powershell = app.json.dumps([
+            {"IPAddress": "10.2.200.44", "PrefixLength": 24},
+            {"IPAddress": "192.168.1.15", "PrefixLength": 24},
+        ])
+        processo = app.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=saida_powershell, stderr=""
+        )
+        with patch.object(app.subprocess, "run", return_value=processo) as executar:
+            redes = app.obter_faixas_de_rede_locais(["10.2.200.44"])
+
+        self.assertEqual(redes, [app.ipaddress.ip_network("10.2.200.0/24")])
+        self.assertEqual(executar.call_args.kwargs["timeout"], 5)
+
+    def test_faixa_personalizada_nao_e_substituida_pela_rede_ativa(self):
+        cabo = {
+            "nome": "Impressora de rede", "ip": "10.2.200.80",
+            "tipo_conexao": "CABO"
+        }
+        with (
+            patch.object(app, "obter_ips_de_rota", return_value=["10.2.200.44"]),
+            patch.object(app, "obter_faixas_de_rede_locais") as obter_redes
+        ):
+            _ips, dentro_da_faixa = app.verificar_rede_corporativa(
+                "192.168.1.0/24", [cabo]
+            )
+
+        self.assertFalse(dentro_da_faixa)
+        obter_redes.assert_not_called()
+
+    def test_faixa_de_exemplo_nao_aprova_impressora_fora_da_subrede_ativa(self):
+        cabo = {
+            "nome": "Impressora de rede", "ip": "192.0.2.220",
+            "tipo_conexao": "CABO"
+        }
+        with (
+            patch.object(app, "obter_ips_de_rota", return_value=["10.2.200.44"]),
+            patch.object(
+                app, "obter_faixas_de_rede_locais",
+                return_value=[app.ipaddress.ip_network("10.2.200.0/24")]
+            )
+        ):
+            _ips, dentro_da_faixa = app.verificar_rede_corporativa(
+                app.FAIXA_REDE_EXEMPLO, [cabo]
+            )
+
+        self.assertFalse(dentro_da_faixa)
 
     def test_atualiza_numero_de_serie_cadastrado_sem_apagar_valor_existente(self):
         config = {
@@ -263,7 +353,11 @@ class ConsultaImpressorasTests(unittest.TestCase):
 
     def test_consulta_usa_lista_configurada_e_atualiza_progresso(self):
         lista = [
-            {"nome": "Impressora 01", "setor": "Setor 01", "host": "PRINTER-01", "ip": "192.0.2.220"},
+            {
+                "nome": "Impressora 01", "setor": "Setor 01",
+                "host": "PRINTER-01", "ip": "192.0.2.220",
+                "total_geral_manual": "1", "tinta_preto_manual": "2%"
+            },
             {
                 "nome": "Impressora 02", "setor": "Setor 02",
                 "host": "PRINTER-02", "ip": "192.0.2.221",
@@ -315,6 +409,7 @@ class ConsultaImpressorasTests(unittest.TestCase):
             )],
             ["11407", "11407", "0", "3", "11404"],
         )
+        self.assertEqual(resultados[0]["tinta_preto"], "-")
         self.assertTrue(resultados[1]["status"].startswith("Falha de comunicação"))
         self.assertEqual(resultados[1]["setor"], "Setor 02")
         self.assertEqual(resultados[1]["numero_serie"], "SN-OFFLINE-2")
@@ -386,6 +481,57 @@ class ConsultaImpressorasTests(unittest.TestCase):
             mensagem.index("*⚠️ IMPRESSORAS SEM COMUNICAÇÃO"),
             mensagem.index("*DETALHAMENTO COMPLETO*"),
         )
+
+    def test_dados_manuais_usb_aparecem_nos_relatorios_e_nao_afetam_cabo(self):
+        usb = {
+            "nome": "Pulmão", "setor": "Produção", "host": "IMP-USB",
+            "ip": "198.51.100.220", "numero_serie": "SNUSB123",
+            "tipo_conexao": "USB", "total_geral_manual": "1450",
+            "tinta_preto_manual": "65%"
+        }
+        cabo = {
+            chave: "-"
+            for chave, _rotulo in app.COLUNAS_TABELA_COMPLETA
+        }
+        cabo.update({
+            "nome": "Impressora de rede", "setor": "TI", "host": "IMP-CABO",
+            "ip": "10.2.200.80", "tipo_conexao": "CABO", "status": "Sucesso",
+            "total_geral": "11407", "total_pb": "11407", "total_cor": "0",
+            "total_2faces": "3", "total_1face": "11404", "tinta_preto": "80%"
+        })
+
+        html_relatorio = app.gerar_html(
+            [cabo], "18/11/2026", impressoras_usb=[usb]
+        )
+        corpo_email = app.montar_email_body(
+            [cabo], "18/11/2026", "relatorio.html", "relatorio.csv",
+            impressoras_usb=[usb]
+        )
+        mensagem_whatsapp = app.montar_whatsapp_body(
+            [cabo], "18/11/2026", impressoras_usb=[usb]
+        )
+
+        for conteudo in (html_relatorio, corpo_email, mensagem_whatsapp):
+            self.assertIn("1450", conteudo)
+            self.assertIn("65%", conteudo)
+            self.assertIn("SNUSB123", conteudo)
+        self.assertIn("11407", html_relatorio)
+        self.assertIn("11407", corpo_email)
+        self.assertIn("11407", mensagem_whatsapp)
+        self.assertIn("80%", mensagem_whatsapp)
+
+        with tempfile.TemporaryDirectory() as pasta_temporaria:
+            caminho_csv = Path(pasta_temporaria) / "relatorio.csv"
+            app.salvar_csv([cabo], caminho_csv, impressoras_usb=[usb])
+            with caminho_csv.open(encoding="utf-8-sig", newline="") as arquivo:
+                linhas = list(app.csv.DictReader(arquivo))
+
+        linha_usb = next(linha for linha in linhas if linha["IP"] == usb["ip"])
+        self.assertEqual(linha_usb["Total geral"], "1450")
+        self.assertEqual(linha_usb["Tinta preta"], "65%")
+        linha_cabo = next(linha for linha in linhas if linha["IP"] == cabo["ip"])
+        self.assertEqual(linha_cabo["Total geral"], "11407")
+        self.assertEqual(linha_cabo["Tinta preta"], "80%")
 
     def test_rascunho_email_cria_eml_com_tabela_e_contador_destacado(self):
         item = {

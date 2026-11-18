@@ -7,6 +7,7 @@ import ipaddress
 import json
 import socket
 import sys
+import subprocess
 import threading
 import unicodedata
 import webbrowser
@@ -50,10 +51,11 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
+FAIXA_REDE_EXEMPLO = "192.0.2.0/24"
 
 
 def texto_versao_aplicativo():
@@ -165,6 +167,8 @@ def validar_lista_impressoras(lista):
         host = item.get("host")
         ip = item.get("ip")
         numero_serie = item.get("numero_serie", "")
+        total_geral_manual = item.get("total_geral_manual", "")
+        tinta_preto_manual = item.get("tinta_preto_manual", "")
         tipo_conexao = item.get("tipo_conexao")
         if not all(isinstance(valor, str) and valor.strip() for valor in (nome, setor, host, ip)):
             raise ValueError(
@@ -172,6 +176,26 @@ def validar_lista_impressoras(lista):
             )
         if not isinstance(numero_serie, str):
             raise ValueError(f"O número de série da impressora {indice} deve ser texto.")
+        if not isinstance(total_geral_manual, str):
+            raise ValueError(
+                f"O número de páginas manual da impressora {indice} deve ser texto."
+            )
+        total_geral_manual = total_geral_manual.strip()
+        if total_geral_manual and not re.fullmatch(r"\d+", total_geral_manual):
+            raise ValueError(
+                f"O número de páginas manual da impressora {indice} deve ser um inteiro não negativo."
+            )
+        if not isinstance(tinta_preto_manual, str):
+            raise ValueError(
+                f"O nível de tinta manual da impressora {indice} deve ser texto."
+            )
+        tinta_preto_manual = tinta_preto_manual.strip().removesuffix("%").strip()
+        if tinta_preto_manual:
+            if not re.fullmatch(r"\d{1,3}", tinta_preto_manual) or not 0 <= int(tinta_preto_manual) <= 100:
+                raise ValueError(
+                    f"O nível de tinta manual da impressora {indice} deve estar entre 0 e 100%."
+                )
+            tinta_preto_manual = f"{int(tinta_preto_manual)}%"
         if tipo_conexao is None or (
             isinstance(tipo_conexao, str) and not tipo_conexao.strip()
         ):
@@ -200,7 +224,9 @@ def validar_lista_impressoras(lista):
             "host": host.strip(),
             "ip": ip_normalizado,
             "numero_serie": numero_serie.strip(),
-            "tipo_conexao": tipo_conexao
+            "tipo_conexao": tipo_conexao,
+            "total_geral_manual": total_geral_manual,
+            "tinta_preto_manual": tinta_preto_manual
         })
 
     return impressoras_validadas
@@ -269,7 +295,85 @@ def verificar_rede_corporativa(faixa_configurada, lista_impressoras=None):
         ipaddress.ip_address(endereco) in faixa
         for endereco in ips_locais
     )
+    if not dentro_da_faixa and faixa == ipaddress.ip_network(FAIXA_REDE_EXEMPLO):
+        redes_locais = obter_faixas_de_rede_locais(ips_locais)
+        dentro_da_faixa = any(
+            ipaddress.ip_address(endereco) in rede
+            and any(
+                ipaddress.ip_address(impressora["ip"]) in rede
+                for impressora in dispositivos_rede
+            )
+            for endereco in ips_locais
+            for rede in redes_locais
+        )
     return ips_locais, dentro_da_faixa
+
+
+def obter_faixas_de_rede_locais(ips_locais):
+    if not ips_locais:
+        return []
+
+    comando = (
+        "Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred "
+        "| Select-Object IPAddress,PrefixLength | ConvertTo-Json -Compress"
+    )
+    try:
+        processo = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", comando],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+        adaptadores = json.loads(processo.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "Não foi possível identificar a máscara da rede ativa do Windows."
+        ) from exc
+    if isinstance(adaptadores, dict):
+        adaptadores = [adaptadores]
+    if not isinstance(adaptadores, list):
+        raise ValueError("Não foi possível interpretar os endereços dos adaptadores de rede.")
+
+    redes = []
+    ips_de_saida = set(ips_locais)
+    for adaptador in adaptadores:
+        if not isinstance(adaptador, dict):
+            continue
+        try:
+            endereco = ipaddress.ip_address(adaptador.get("IPAddress", ""))
+            prefixo = int(adaptador.get("PrefixLength"))
+            if endereco.version == 4 and str(endereco) in ips_de_saida:
+                redes.append(ipaddress.ip_network(f"{endereco}/{prefixo}", strict=False))
+        except (TypeError, ValueError):
+            continue
+    return redes
+
+
+def linhas_usb_cadastradas(impressoras_usb, ips_resultados=None):
+    ips_resultados = ips_resultados or set()
+    linhas = []
+    for impressora in impressoras_usb or ():
+        tipo_conexao = str(
+            impressora.get("tipo_conexao")
+            or tipo_conexao_padrao(impressora.get("nome", ""))
+        ).strip().upper()
+        ip = limpar_texto(impressora.get("ip"))
+        if tipo_conexao != "USB" or ip in ips_resultados:
+            continue
+        linhas.append({
+            "setor": limpar_texto(impressora.get("setor"), "Não informado"),
+            "host": limpar_texto(impressora.get("host")),
+            "ip": ip,
+            "tipo_conexao": "USB",
+            "nome": limpar_texto(impressora.get("nome")),
+            "numero_serie": limpar_texto(impressora.get("numero_serie")),
+            "total_geral": limpar_texto(impressora.get("total_geral_manual")),
+            "tinta_preto": limpar_texto(impressora.get("tinta_preto_manual")),
+            "status": "USB — não consultada (conexão local)",
+        })
+    return linhas
 
 
 def escapar_html(valor):
@@ -740,24 +844,7 @@ def gerar_html(
 ):
     alertas = gerar_alertas(resultados, limite_tinta)
     ips_resultados = {limpar_texto(item.get('ip')) for item in resultados}
-    linhas_usb = []
-    for impressora in impressoras_usb or ():
-        tipo_conexao = str(
-            impressora.get('tipo_conexao')
-            or tipo_conexao_padrao(impressora.get('nome', ''))
-        ).strip().upper()
-        ip = limpar_texto(impressora.get('ip'))
-        if tipo_conexao != 'USB' or ip in ips_resultados:
-            continue
-        linhas_usb.append({
-            'setor': limpar_texto(impressora.get('setor'), 'Não informado'),
-            'host': limpar_texto(impressora.get('host')),
-            'ip': ip,
-            'tipo_conexao': 'USB',
-            'nome': limpar_texto(impressora.get('nome')),
-            'numero_serie': limpar_texto(impressora.get('numero_serie')),
-            'status': 'USB — não consultada (conexão local)',
-        })
+    linhas_usb = linhas_usb_cadastradas(impressoras_usb, ips_resultados)
 
     equipamentos_ok = sum(item.get('status') == 'Sucesso' for item in resultados)
     equipamentos_parciais = sum(
@@ -852,7 +939,7 @@ def gerar_html(
                 <div class=\"chip\"><strong>Falhas de comunicação</strong><span>{equipamentos_com_falha}</span></div>
                 <div class=\"chip\"><strong>Itens para atenção</strong><span>{len(alertas)}</span></div>
             </div>
-            <p class=\"observacao\">O relatório detalha os equipamentos consultados; impressoras USB aparecem na tabela como não consultadas.</p>
+            <p class=\"observacao\">O relatório detalha os equipamentos consultados; impressoras USB aparecem como não consultadas, com páginas e tinta digitadas no cadastro quando informadas.</p>
         </div>
 """
 
@@ -998,7 +1085,11 @@ def salvar_relatorio(html, caminho):
     return caminho.resolve()
 
 
-def salvar_csv(resultados, caminho):
+def salvar_csv(resultados, caminho, impressoras_usb=None):
+    itens_relatorio = resultados + linhas_usb_cadastradas(
+        impressoras_usb,
+        {limpar_texto(item.get("ip")) for item in resultados}
+    )
     colunas = [
         ('setor', 'Setor físico'),
         ('host', 'Hostname'),
@@ -1031,7 +1122,7 @@ def salvar_csv(resultados, caminho):
     with caminho.open('w', newline='', encoding='utf-8-sig') as arquivo:
         escritor = csv.DictWriter(arquivo, fieldnames=[rotulo for _, rotulo in colunas])
         escritor.writeheader()
-        for item in resultados:
+        for item in itens_relatorio:
             escritor.writerow({
                 rotulo: limpar_texto(item.get(chave))
                 for chave, rotulo in colunas
@@ -1074,7 +1165,14 @@ def separar_whatsapp_numeros(numeros):
     return numeros_formatados
 
 
-def montar_email_body(resultados, data_consulta, caminho_html, caminho_csv, limite_tinta=20):
+def montar_email_body(
+    resultados, data_consulta, caminho_html, caminho_csv, limite_tinta=20,
+    impressoras_usb=None
+):
+    itens_relatorio = resultados + linhas_usb_cadastradas(
+        impressoras_usb,
+        {limpar_texto(item.get("ip")) for item in resultados}
+    )
     return f"""<!doctype html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><title>Relatório mensal de impressoras</title></head>
@@ -1082,10 +1180,11 @@ def montar_email_body(resultados, data_consulta, caminho_html, caminho_csv, limi
     <p>Prezados,</p>
     <p>Encaminho o relatório técnico mensal dos equipamentos de impressão locados.</p>
     <p><strong>Data da consulta:</strong> {escapar_html(data_consulta)}<br>
-    <strong>Equipamentos consultados:</strong> {len(resultados)}</p>
+    <strong>Equipamentos consultados pela rede:</strong> {len(resultados)}<br>
+    <strong>Impressoras USB cadastradas:</strong> {len(itens_relatorio) - len(resultados)}</p>
     <h2 style="color:#0f4c81;">Detalhamento dos equipamentos</h2>
     <p>Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; as linhas destacadas indicam falhas ou alertas. O total de páginas está em amarelo.</p>
-    {gerar_tabela_completa(resultados, limite_tinta)}
+    {gerar_tabela_completa(itens_relatorio, limite_tinta)}
     <h3 style="color:#0f4c81;">Arquivos do relatório</h3>
     <p>HTML: {escapar_html(caminho_html)}<br>
     CSV: {escapar_html(caminho_csv)}</p>
@@ -1106,7 +1205,11 @@ def converter_email_html_para_texto(body):
     return '\n'.join(linha.strip() for linha in texto.splitlines() if linha.strip())
 
 
-def montar_whatsapp_body(resultados, data_consulta):
+def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
+    itens_relatorio = resultados + linhas_usb_cadastradas(
+        impressoras_usb,
+        {limpar_texto(item.get("ip")) for item in resultados}
+    )
     linhas = [
         'Bom dia,',
         '',
@@ -1142,7 +1245,7 @@ def montar_whatsapp_body(resultados, data_consulta):
         linhas.extend(['*Sem falhas de comunicação registradas.*', ''])
 
     linhas.extend(['*DETALHAMENTO COMPLETO*', ''])
-    for item in resultados:
+    for item in itens_relatorio:
         ip = limpar_texto(item.get('ip'))
         linhas.extend([
             f"Identificação: {limpar_texto(item.get('nome'), 'Impressora')} | Modelo: {limpar_texto(item.get('modelo'))}",
@@ -1739,15 +1842,16 @@ def construir_interface(config, caminho_config):
 
         janela = tk.Toplevel(root)
         janela.title('Lista de impressoras da unidade')
-        janela.geometry('930x460')
-        janela.minsize(860, 400)
+        janela.geometry('1180x460')
+        janela.minsize(1060, 400)
         janela.transient(root)
         janela.columnconfigure(0, weight=1)
         janela.rowconfigure(0, weight=1)
 
         lista_editada = [dict(item) for item in config['impressoras']]
         colunas = (
-            'nome', 'setor', 'host', 'ip', 'numero_serie', 'tipo_conexao'
+            'nome', 'setor', 'host', 'ip', 'numero_serie', 'tipo_conexao',
+            'total_geral_manual', 'tinta_preto_manual'
         )
         tabela = ttk.Treeview(janela, columns=colunas, show='headings', selectmode='browse')
         for coluna, titulo, largura in (
@@ -1756,7 +1860,9 @@ def construir_interface(config, caminho_config):
             ('host', 'Hostname', 170),
             ('ip', 'IP', 130),
             ('numero_serie', 'Número de série', 170),
-            ('tipo_conexao', 'Tipo Conexão', 110)
+            ('tipo_conexao', 'Tipo Conexão', 110),
+            ('total_geral_manual', 'Páginas (USB)', 110),
+            ('tinta_preto_manual', 'Tinta (USB)', 100)
         ):
             tabela.heading(coluna, text=titulo)
             tabela.column(coluna, width=largura, anchor='w')
@@ -1780,18 +1886,21 @@ def construir_interface(config, caminho_config):
                         item['host'],
                         item['ip'],
                         item.get('numero_serie') or '-',
-                        item['tipo_conexao']
+                        item['tipo_conexao'],
+                        item.get('total_geral_manual') or '-',
+                        item.get('tinta_preto_manual') or '-'
                     )
                 )
 
         def editar_impressora(indice=None):
             registro = lista_editada[indice] if indice is not None else {
                 'nome': '', 'setor': '', 'host': '', 'ip': '',
-                'numero_serie': '', 'tipo_conexao': 'CABO'
+                'numero_serie': '', 'tipo_conexao': 'CABO',
+                'total_geral_manual': '', 'tinta_preto_manual': ''
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
-            formulario.geometry('480x390')
+            formulario.geometry('500x490')
             formulario.resizable(False, False)
             formulario.transient(janela)
             formulario.grab_set()
@@ -1841,6 +1950,45 @@ def construir_interface(config, caminho_config):
                 padx=(8, 16),
                 pady=6
             )
+            linha_paginas = linha_conexao + 1
+            for linha, (rotulo, chave) in enumerate((
+                ('Número total de páginas (USB - manual)', 'total_geral_manual'),
+                ('Nível de tinta preta % (USB - manual)', 'tinta_preto_manual')
+            ), start=linha_paginas):
+                tk.Label(
+                    formulario, text=rotulo, font=('Arial', 10, 'bold')
+                ).grid(row=linha, column=0, sticky='w', padx=16, pady=6)
+                variavel = tk.StringVar(value=registro.get(chave, ''))
+                variaveis[chave] = variavel
+                entrada = tk.Entry(
+                    formulario, textvariable=variavel, font=('Arial', 10), width=40
+                )
+                entrada.grid(
+                    row=linha, column=1, sticky='ew', padx=(8, 16), pady=6
+                )
+                entradas[chave] = entrada
+
+            linha_ajuda = linha_paginas + 2
+            tk.Label(
+                formulario,
+                text='Para USB, preencha os dados manualmente. Em CABO/WIFI, a consulta usa os valores encontrados no equipamento.',
+                font=('Arial', 8),
+                fg='#475569',
+                wraplength=455,
+                justify='left'
+            ).grid(
+                row=linha_ajuda, column=0, columnspan=2, sticky='w',
+                padx=16, pady=(2, 8)
+            )
+
+            def atualizar_campos_usb(_event=None):
+                estado = (
+                    'normal' if variaveis['tipo_conexao'].get() == 'USB'
+                    else 'disabled'
+                )
+                for chave in ('total_geral_manual', 'tinta_preto_manual'):
+                    entradas[chave].configure(state=estado)
+
             conexao_escolhida = {
                 'manualmente': (
                     registro.get('tipo_conexao')
@@ -1853,12 +2001,17 @@ def construir_interface(config, caminho_config):
                     variaveis['tipo_conexao'].set(
                         tipo_conexao_padrao(variaveis['nome'].get())
                     )
+                    atualizar_campos_usb()
 
             combo_tipo_conexao.bind(
                 '<<ComboboxSelected>>',
                 lambda _event: conexao_escolhida.update(manualmente=True),
                 add='+'
             )
+            combo_tipo_conexao.bind(
+                '<<ComboboxSelected>>', atualizar_campos_usb, add='+'
+            )
+            atualizar_campos_usb()
             entradas['nome'].bind('<KeyRelease>', atualizar_tipo_sugerido, add='+')
 
             def salvar_impressora():
@@ -1889,7 +2042,7 @@ def construir_interface(config, caminho_config):
                 relief='flat',
                 padx=16,
                 pady=7
-            ).grid(row=len(campos) + 1, column=0, columnspan=2, pady=14)
+            ).grid(row=linha_ajuda + 1, column=0, columnspan=2, pady=14)
 
         def adicionar_impressora():
             editar_impressora()
@@ -1960,7 +2113,8 @@ def construir_interface(config, caminho_config):
                 dados['data'],
                 dados['html'],
                 dados['csv'],
-                config['limite_tinta']
+                config['limite_tinta'],
+                impressoras_usb=config['impressoras']
             )
             caminho_eml = abrir_email(email_var.get().strip(), body)
             messagebox.showinfo(
@@ -1980,7 +2134,8 @@ def construir_interface(config, caminho_config):
                 whatsapp_var.get().strip(),
                 montar_whatsapp_body(
                     dados['resultados'],
-                    dados['data']
+                    dados['data'],
+                    impressoras_usb=config['impressoras']
                 )
             )
         except (OSError, RuntimeError, ValueError) as exc:
@@ -2074,7 +2229,8 @@ def construir_interface(config, caminho_config):
             root.after(0, lambda: atualizar_progresso(95, 'Salvando o relatório CSV...'))
             caminho_csv = salvar_csv(
                 resultados,
-                pasta_relatorios / f'relatorio_impressoras_{marca_tempo}.csv'
+                pasta_relatorios / f'relatorio_impressoras_{marca_tempo}.csv',
+                impressoras_usb=config['impressoras']
             )
             root.after(0, lambda: atualizar_progresso(100, 'Consulta concluída.'))
             root.after(0, lambda: consulta_concluida(resultados, data_consulta, caminho_html, caminho_csv))
