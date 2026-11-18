@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.0.13"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -867,12 +867,12 @@ COLUNAS_TABELA_COMPLETA = (
     ('mac', 'MAC'),
     ('ip', 'IP'),
     ('numero_serie', 'Número de série'),
+    ('tinta_preto', 'Tinta preta'),
     ('total_geral', 'Número total de páginas'),
     ('total_pb', 'P&B'),
     ('total_cor', 'Cor'),
     ('total_2faces', 'Impressão em 2 faces'),
     ('total_1face', 'Impressão em 1 face'),
-    ('tinta_preto', 'Tinta preta'),
     ('status', 'Status'),
     ('estado_impressora', 'Estado da impressora'),
     ('estado_digitalizador', 'Estado do digitalizador'),
@@ -920,7 +920,6 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
 
     linhas = []
     for item in resultados:
-        status = limpar_texto(item.get('status'))
         tipo_conexao = str(
             item.get('tipo_conexao')
             or tipo_conexao_padrao(item.get('nome', ''))
@@ -936,9 +935,6 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
         elif tipo_alerta == 'Tinta baixa':
             classe_linha = 'alerta-tinta-baixa'
             estilo_linha = 'background:#c2410c;color:#fff;font-weight:bold;'
-        elif status.startswith('Sucesso parcial'):
-            classe_linha = 'sucesso-parcial'
-            estilo_linha = 'background:#b45309;color:#fff;font-weight:bold;'
         elif is_usb:
             classe_linha = 'conexao-usb'
             estilo_linha = 'background:#1d4ed8;color:#fff;font-weight:bold;'
@@ -1097,6 +1093,14 @@ def gerar_html(
         </div>
 """
 
+    html += f"""
+        <section class="tabela-final">
+            <h2>Relatório completo em tabela</h2>
+            <p>Linhas de CABO ficam com fundo branco e USB é destacada em azul; falhas e alertas mantêm cores fortes. A tinta aparece antes dos contadores de páginas.</p>
+            {gerar_tabela_completa(resultados + linhas_usb, limite_tinta)}
+        </section>
+"""
+
     if alertas:
         itens_acao_html = []
         for alerta in alertas:
@@ -1212,14 +1216,6 @@ def gerar_html(
                 {alertas_html}
             </div>
         </div>
-"""
-
-    html += f"""
-        <section class="tabela-final">
-            <h2>Relatório completo em tabela</h2>
-            <p>Cada linha representa uma impressora. USB é destacada em azul; falhas e alertas usam cores fortes. Os dados de identificação ficam agrupados com IP e MAC, antes dos contadores; o total de páginas está destacado em amarelo.</p>
-            {gerar_tabela_completa(resultados + linhas_usb, limite_tinta)}
-        </section>
 """
 
     html += f"""

@@ -763,7 +763,14 @@ Adaptador Ethernet Ethernet:
             corpo.index(">Número de série<"),
             corpo.index(">Número total de páginas<"),
         )
-        self.assertLess(corpo.index("Impressão em 1 face"), corpo.index("Tinta preta"))
+        self.assertLess(
+            corpo.index(">Número de série<"),
+            corpo.index(">Tinta preta<"),
+        )
+        self.assertLess(
+            corpo.index(">Tinta preta<"),
+            corpo.index(">Número total de páginas<"),
+        )
         self.assertEqual(corpo.count(">Tinta preta<"), 1)
         self.assertIn(">Identificação<", corpo)
         self.assertEqual(corpo.count('<tr class="linha-impressora">'), 1)
@@ -832,6 +839,13 @@ Adaptador Ethernet Ethernet:
             "status": "Sucesso",
             "tinta_preto": "15%",
         }
+        sucesso_parcial = {
+            "nome": "Impressora 04",
+            "host": "PRINTER-04",
+            "ip": "192.0.2.223",
+            "tipo_conexao": "CABO",
+            "status": "Sucesso parcial: alguns dados indisponíveis",
+        }
         usb = {
             "nome": "Pulmão",
             "ip": "198.51.100.220",
@@ -839,13 +853,17 @@ Adaptador Ethernet Ethernet:
             "status": "Sucesso",
         }
 
-        tabela = app.gerar_tabela_completa([sem_comunicacao, tinta_baixa, usb])
+        tabela = app.gerar_tabela_completa([
+            sem_comunicacao, tinta_baixa, sucesso_parcial, usb
+        ])
 
         self.assertIn('class="linha-impressora sem-comunicacao"', tabela)
         self.assertIn('class="linha-impressora alerta-tinta-baixa"', tabela)
         self.assertIn('class="linha-impressora conexao-usb"', tabela)
+        self.assertIn('class="linha-impressora"><td', tabela)
         self.assertIn("background:#991b1b;color:#fff;font-weight:bold;", tabela)
         self.assertIn("background:#c2410c;color:#fff;font-weight:bold;", tabela)
+        self.assertNotIn("background:#b45309;color:#fff;font-weight:bold;", tabela)
         self.assertIn("background:#1d4ed8;color:#fff;font-weight:bold;", tabela)
         self.assertGreaterEqual(tabela.count("white-space:nowrap;background:#1d4ed8"), 20)
 
@@ -922,6 +940,10 @@ Adaptador Ethernet Ethernet:
         self.assertIn("localizacao-setor", relatorio)
         self.assertIn("localizacao-ip", relatorio)
         self.assertIn('<section class="tabela-final">', relatorio)
+        self.assertLess(
+            relatorio.index('<section class="tabela-final">'),
+            relatorio.index('<div class="card">')
+        )
         self.assertIn("Nome do dispositivo", relatorio)
         self.assertIn("Número de série", relatorio)
         self.assertIn("Tipo Conexão", relatorio)
@@ -941,9 +963,8 @@ Adaptador Ethernet Ethernet:
         cabecalho = relatorio[inicio_cabecalho:fim_cabecalho]
         colunas_na_ordem = (
             '>MAC<', '>IP<', '>Número de série<',
-            '>Número total de páginas<', '>P&amp;B<', '>Cor<',
+            '>Tinta preta<', '>Número total de páginas<', '>P&amp;B<', '>Cor<',
             '>Impressão em 2 faces<', '>Impressão em 1 face<',
-            '>Tinta preta<',
         )
         posicoes_colunas = [cabecalho.index(rotulo) for rotulo in colunas_na_ordem]
         self.assertEqual(posicoes_colunas, sorted(posicoes_colunas))
