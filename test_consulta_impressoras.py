@@ -126,6 +126,27 @@ class ConsultaImpressorasTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     app.validar_lista_impressoras([{**usb, campo: valor}])
 
+    def test_lista_impressoras_usb_com_dados_manualmente_pendentes(self):
+        pendentes = app.impressoras_usb_pendentes([
+            {
+                "nome": "Pulmão 1", "tipo_conexao": "USB",
+                "total_geral_manual": "", "tinta_preto_manual": ""
+            },
+            {
+                "nome": "Pulmão 2", "tipo_conexao": "USB",
+                "total_geral_manual": "0", "tinta_preto_manual": "0%"
+            },
+            {
+                "nome": "Impressora de rede", "tipo_conexao": "CABO",
+                "total_geral_manual": "", "tinta_preto_manual": ""
+            }
+        ])
+
+        self.assertEqual(pendentes, [{
+            "nome": "Pulmão 1",
+            "campos": ["Páginas", "Tinta preta"]
+        }])
+
     def test_tipo_conexao_aceita_apenas_opcoes_fixas(self):
         impressora = {
             "nome": "Impressora WiFi",
@@ -657,6 +678,40 @@ Adaptador Ethernet Ethernet:
         linha_cabo = next(linha for linha in linhas if linha["IP"] == cabo["ip"])
         self.assertEqual(linha_cabo["Total geral"], "11407")
         self.assertEqual(linha_cabo["Tinta preta"], "80%")
+
+    def test_atualizar_dados_usb_refaz_html_e_csv_sem_nova_consulta(self):
+        usb = {
+            "nome": "Pulmão", "setor": "Produção", "host": "IMP-USB",
+            "ip": "198.51.100.220", "tipo_conexao": "USB",
+            "total_geral_manual": "", "tinta_preto_manual": ""
+        }
+        with tempfile.TemporaryDirectory() as pasta_temporaria:
+            caminho_html = Path(pasta_temporaria) / "relatorio.html"
+            caminho_csv = Path(pasta_temporaria) / "relatorio.csv"
+            caminho_html, caminho_csv = app.atualizar_relatorios_salvos(
+                [], "18/11/2026", caminho_html, caminho_csv,
+                impressoras_usb=[usb]
+            )
+
+            usb["total_geral_manual"] = "1820"
+            usb["tinta_preto_manual"] = "73%"
+            caminho_html_atualizado, caminho_csv_atualizado = (
+                app.atualizar_relatorios_salvos(
+                    [], "18/11/2026", caminho_html, caminho_csv,
+                    impressoras_usb=[usb]
+                )
+            )
+
+            html_relatorio = caminho_html_atualizado.read_text(encoding="utf-8")
+            with caminho_csv_atualizado.open(
+                encoding="utf-8-sig", newline=""
+            ) as arquivo:
+                linhas = list(app.csv.DictReader(arquivo))
+
+        self.assertIn("1820", html_relatorio)
+        self.assertIn("73%", html_relatorio)
+        self.assertEqual(linhas[0]["Total geral"], "1820")
+        self.assertEqual(linhas[0]["Tinta preta"], "73%")
 
     def test_rascunho_email_cria_eml_com_tabela_e_contador_destacado(self):
         item = {

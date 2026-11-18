@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -478,6 +478,28 @@ def linhas_usb_cadastradas(impressoras_usb, ips_resultados=None):
             "status": "USB — não consultada (conexão local)",
         })
     return linhas
+
+
+def impressoras_usb_pendentes(impressoras_usb):
+    pendentes = []
+    for impressora in impressoras_usb or ():
+        tipo_conexao = str(
+            impressora.get("tipo_conexao")
+            or tipo_conexao_padrao(impressora.get("nome", ""))
+        ).strip().upper()
+        if tipo_conexao != "USB":
+            continue
+        campos = []
+        if limpar_texto(impressora.get("total_geral_manual")) == "-":
+            campos.append("Páginas")
+        if limpar_texto(impressora.get("tinta_preto_manual")) == "-":
+            campos.append("Tinta preta")
+        if campos:
+            pendentes.append({
+                "nome": limpar_texto(impressora.get("nome")),
+                "campos": campos
+            })
+    return pendentes
 
 
 def escapar_html(valor):
@@ -1295,6 +1317,23 @@ def separar_whatsapp_numeros(numeros):
         if numero_formatado not in numeros_formatados:
             numeros_formatados.append(numero_formatado)
     return numeros_formatados
+
+
+def atualizar_relatorios_salvos(
+    resultados, data_consulta, caminho_html, caminho_csv,
+    limite_tinta=20, impressoras_usb=None
+):
+    if resultados is None or caminho_html is None or caminho_csv is None:
+        raise ValueError("Não há consulta concluída para atualizar os relatórios.")
+    html_relatorio = gerar_html(
+        resultados,
+        data_consulta,
+        limite_tinta,
+        impressoras_usb=impressoras_usb
+    )
+    caminho_html = salvar_relatorio(html_relatorio, caminho_html)
+    caminho_csv = salvar_csv(resultados, caminho_csv, impressoras_usb)
+    return caminho_html, caminho_csv
 
 
 def montar_email_body(
@@ -2224,11 +2263,40 @@ def construir_interface(config, caminho_config):
                 messagebox.showerror('Não foi possível salvar a lista', str(exc), parent=janela)
                 return
             config.update(config_atualizada)
+            if dados['resultados'] is not None:
+                try:
+                    dados['html'], dados['csv'] = atualizar_relatorios_salvos(
+                        dados['resultados'],
+                        dados['data'],
+                        dados['html'],
+                        dados['csv'],
+                        config['limite_tinta'],
+                        impressoras_usb=config['impressoras']
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    messagebox.showerror(
+                        'Dados salvos; relatórios não atualizados',
+                        f'O cadastro foi salvo, mas os relatórios não puderam ser '
+                        f'atualizados: {exc}\n\nClique em Salvar lista novamente '
+                        'para tentar atualizar os arquivos.',
+                        parent=janela
+                    )
+                    status_var.set(
+                        'Os dados USB foram salvos, mas os relatórios precisam ser atualizados.'
+                    )
+                    return
             janela.destroy()
-            status_var.set(
-                f"Lista de {len(config['impressoras'])} impressora(s) salva. "
-                'Clique em Atualizar consulta para buscar os dados.'
-            )
+            if dados['resultados'] is not None:
+                status_var.set(
+                    f"Lista de {len(config['impressoras'])} impressora(s) salva. "
+                    'Relatórios HTML e CSV atualizados com os dados USB. '
+                    'Revise antes de enviar ao fornecedor.'
+                )
+            else:
+                status_var.set(
+                    f"Lista de {len(config['impressoras'])} impressora(s) salva. "
+                    'Clique em Atualizar consulta para buscar os dados.'
+                )
 
         tk.Button(janela, text='Adicionar', command=adicionar_impressora).grid(
             row=1, column=0, sticky='w', padx=12, pady=(0, 12)
@@ -2250,9 +2318,32 @@ def construir_interface(config, caminho_config):
         ).grid(row=1, column=3, sticky='e', padx=(4, 12), pady=(0, 12))
         atualizar_tabela()
 
+    def avisar_dados_usb_pendentes():
+        pendentes = impressoras_usb_pendentes(config['impressoras'])
+        if not pendentes:
+            return False
+        detalhes = '\n'.join(
+            f"• {item['nome']}: {', '.join(item['campos'])}"
+            for item in pendentes
+        )
+        messagebox.showwarning(
+            'Complete os dados das impressoras USB',
+            'Antes de preparar o envio ao fornecedor, informe os valores reais '
+            'de páginas e tinta das impressoras USB.\n\n'
+            f'{detalhes}\n\n'
+            'Use Gerenciar impressoras > selecione a impressora > Editar e '
+            'depois clique em Salvar lista.'
+        )
+        status_var.set(
+            'Preencha páginas e tinta das impressoras USB antes de preparar o envio.'
+        )
+        return True
+
     def abrir_rascunho_email():
         if dados['resultados'] is None:
             messagebox.showinfo('Aguarde', 'A consulta das impressoras ainda está em andamento.')
+            return
+        if avisar_dados_usb_pendentes():
             return
         try:
             persistir_contatos()
@@ -2275,6 +2366,8 @@ def construir_interface(config, caminho_config):
     def abrir_conversa_whatsapp():
         if dados['resultados'] is None:
             messagebox.showinfo('Aguarde', 'A consulta das impressoras ainda está em andamento.')
+            return
+        if avisar_dados_usb_pendentes():
             return
         try:
             persistir_contatos()
