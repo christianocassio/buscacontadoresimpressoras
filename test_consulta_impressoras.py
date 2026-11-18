@@ -609,8 +609,8 @@ Adaptador Ethernet Ethernet:
         self.assertEqual(resultados[0]["setor"], "Setor 01")
         self.assertEqual(resultados[0]["modelo"], "WF-M5899 Series")
         self.assertEqual(resultados[0]["mac"], "02:00:00:00:00:01")
-        self.assertEqual(resultados[0]["nome_dispositivo"], "EPSONTEST01")
         self.assertEqual(resultados[0]["numero_serie"], "SNTEST12345")
+        self.assertEqual(resultados[0]["status"], "Sucesso")
         self.assertEqual(
             [resultados[0][chave] for chave in (
                 "total_geral", "total_pb", "total_cor", "total_2faces", "total_1face"
@@ -666,7 +666,8 @@ Adaptador Ethernet Ethernet:
             "MAC: 02:00:00:00:00:01",
             mensagem,
         )
-        self.assertIn("Nome do dispositivo: EPSONTEST01", mensagem)
+        self.assertNotIn("Nome do dispositivo", mensagem)
+        self.assertIn("Hostname: PRINTER-01", mensagem)
         self.assertIn("Número de série: SNTEST12345", mensagem)
         self.assertNotIn("*⚠️ IMPRESSORAS COM TINTA VAZIA OU BAIXA*", mensagem)
         self.assertIn("Identificação: Impressora 1 | Modelo: WF-M5899 Series", mensagem)
@@ -810,7 +811,7 @@ Adaptador Ethernet Ethernet:
         for rotulo in (
             "Setor físico", "Hostname", "IP", "Número total de páginas",
             "P&amp;B", "Cor", "Impressão em 2 faces", "Impressão em 1 face",
-            "Nome do dispositivo", "Número de série", "Modelo", "MAC",
+            "Número de série", "Modelo", "MAC",
             "Firmware", "Status", "Estado da impressora", "Estado do digitalizador",
             "Leitor de cartão", "Epson Connect", "Tinta preta", "Caixa de manutenção",
             "Nível de papel geral", "Bandeja 1", "Tamanho do papel", "Tipo de papel",
@@ -854,9 +855,10 @@ Adaptador Ethernet Ethernet:
             celula.get_text(" ", strip=True)
             for celula in tabela_completa.select("tbody tr:first-child td")
         ]
-        self.assertEqual(
-            valores[cabecalho.index("Nome do dispositivo")], "PRINTER-01"
-        )
+        self.assertNotIn("Nome do dispositivo", cabecalho)
+        self.assertEqual(cabecalho.count("Hostname"), 1)
+        self.assertEqual(valores[cabecalho.index("Hostname")], "PRINTER-01")
+        self.assertEqual(len(valores), len(cabecalho))
         self.assertNotIn("EPSONTEST01", corpo)
         self.assertIn("SNTEST12345", corpo)
         self.assertIn(
@@ -948,7 +950,7 @@ Adaptador Ethernet Ethernet:
         self.assertIn("background:#1d4ed8;color:#fff;font-weight:bold;", tabela)
         self.assertGreaterEqual(tabela.count("white-space:nowrap;background:#1d4ed8"), 20)
 
-    def test_csv_inclui_nome_dispositivo_numero_serie_e_contadores_no_inicio(self):
+    def test_csv_usa_hostname_numero_serie_e_contadores_no_inicio(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:
             caminho_csv = Path(pasta_temporaria) / "relatorio.csv"
             app.salvar_csv([{
@@ -966,14 +968,15 @@ Adaptador Ethernet Ethernet:
                 linha = next(leitor)
                 colunas = leitor.fieldnames
 
-        self.assertEqual(linha["Nome do dispositivo"], "EPSONTEST01")
+        self.assertNotIn("Nome do dispositivo", colunas)
+        self.assertEqual(linha["Hostname"], "PRINTER-01")
         self.assertEqual(linha["Número de série"], "SNTEST12345")
         self.assertEqual(linha["Total geral"], "11407")
-        self.assertEqual(colunas[:9], [
+        self.assertEqual(colunas[:8], [
             "Setor físico", "Hostname", "IP", "Identificação",
-            "Nome do dispositivo", "Número de série", "Modelo", "MAC", "Firmware"
+            "Número de série", "Modelo", "MAC", "Firmware"
         ])
-        self.assertEqual(colunas[9], "Total geral")
+        self.assertEqual(colunas[8], "Total geral")
 
     def test_relatorio_destaca_setor_e_ip(self):
         item = {
@@ -1024,17 +1027,26 @@ Adaptador Ethernet Ethernet:
             "<title>Relatório Mensal de Impressoras</title>", relatorio
         )
         self.assertIn('<section class="tabela-final">', relatorio)
+        self.assertIn("<h2>Relatório por Setor x Dispositivos</h2>", relatorio)
+        self.assertNotIn("Relatório completo em tabela", relatorio)
+        self.assertNotIn(
+            ">Nome do dispositivo<",
+            str(app.BeautifulSoup(relatorio, "html.parser").select_one(
+                "table.dados-impressora thead"
+            ))
+        )
         self.assertLess(
             relatorio.index('<section class="tabela-final">'),
             relatorio.index('<div class="card">')
         )
-        self.assertIn("Nome do dispositivo", relatorio)
+        self.assertNotIn("Nome do dispositivo", relatorio)
+        self.assertNotIn("EPSONTEST01", relatorio)
+        self.assertIn("Hostname", relatorio)
         self.assertIn("Número de série", relatorio)
         self.assertIn("Tipo Conexão", relatorio)
         self.assertIn('class="linha-impressora conexao-usb"', relatorio)
         self.assertIn("USB — não consultada (conexão local)", relatorio)
         self.assertIn('<strong>Total de equipamentos</strong><span>2</span>', relatorio)
-        self.assertIn("EPSONTEST01", relatorio)
         self.assertIn("SNTEST12345", relatorio)
         self.assertIn(
             'href="https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP"',

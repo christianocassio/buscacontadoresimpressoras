@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.15"
+APP_VERSION = "1.0.16"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -951,7 +951,6 @@ COLUNAS_TABELA_COMPLETA = (
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
     ('nome', 'Identificação'),
-    ('host', 'Nome do dispositivo'),
     ('modelo', 'Modelo'),
     ('firmware', 'Firmware'),
     ('tipo_conexao', 'Tipo Conexão'),
@@ -1186,7 +1185,7 @@ def gerar_html(
 
     html += f"""
         <section class="tabela-final">
-            <h2>Relatório completo em tabela</h2>
+            <h2>Relatório por Setor x Dispositivos</h2>
             <p>Linhas de CABO ficam com fundo branco e USB é destacada em azul; falhas e alertas mantêm cores fortes. A tinta aparece antes dos contadores de páginas.</p>
             {gerar_tabela_completa(resultados + linhas_usb, limite_tinta)}
         </section>
@@ -1213,8 +1212,7 @@ def gerar_html(
                         &nbsp; | &nbsp; <strong>Hostname:</strong> {escapar_html(alerta['host'])}
                     </p>
                     <p class="acao-detalhe">
-                        <strong>Nome do dispositivo:</strong> {escapar_html(alerta['nome_dispositivo'])}
-                        &nbsp; | &nbsp; <strong>Número de série:</strong> {escapar_html(alerta['numero_serie'])}
+                        <strong>Número de série:</strong> {escapar_html(alerta['numero_serie'])}
                     </p>
                     <p class=\"acao-detalhe\">{escapar_html(alerta['descricao'])}</p>
                     <p class=\"acao-providencia\">Ação: {escapar_html(alerta['acao'])}</p>
@@ -1265,7 +1263,6 @@ def gerar_html(
                     <div>
                         <div class=\"titulo-secao\">📡 Dados da rede</div>
                         <div class=\"item\"><div class=\"label\">Hostname</div><div class=\"valor\">{escapar_html(r['host'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Nome do dispositivo</div><div class=\"valor\">{escapar_html(r.get('nome_dispositivo'))}</div></div>
                         <div class=\"item\"><div class=\"label\">Número de série</div><div class=\"valor\">{escapar_html(r.get('numero_serie'))}</div></div>
                         <div class=\"item\"><div class=\"label\">MAC</div><div class=\"valor\">{escapar_html(r['mac'])}</div></div>
                         <div class=\"item\"><div class=\"label\">Firmware</div><div class=\"valor\">{escapar_html(r['firmware'])}</div></div>
@@ -1336,7 +1333,6 @@ def salvar_csv(resultados, caminho, impressoras_usb=None):
         ('host', 'Hostname'),
         ('ip', 'IP'),
         ('nome', 'Identificação'),
-        ('nome_dispositivo', 'Nome do dispositivo'),
         ('numero_serie', 'Número de série'),
         ('modelo', 'Modelo'),
         ('mac', 'MAC'),
@@ -1493,7 +1489,6 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
                 f"Máquina: {limpar_texto(item.get('host'))}",
                 f"IP: {ip} | Gestão: {url_gestao_impressora(ip) or '-'} | "
                 f"MAC: {limpar_texto(item.get('mac'))}",
-                f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))} | "
                 f"Número de série: {limpar_texto(item.get('numero_serie'))} | "
                 f"Modelo: {limpar_texto(item.get('modelo'))}",
                 '*Ação: acionar o TI da filial.*',
@@ -1511,7 +1506,6 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
             f"Hostname: {limpar_texto(item.get('host'))} | IP: {ip} | "
             f"Gestão: {url_gestao_impressora(ip) or '-'} | "
             f"MAC: {limpar_texto(item.get('mac'))}",
-            f"Nome do dispositivo: {limpar_texto(item.get('nome_dispositivo'))} | "
             f"Número de série: {limpar_texto(item.get('numero_serie'))} | "
             f"Modelo: {limpar_texto(item.get('modelo'))}",
             f"Status: {limpar_texto(item.get('status'))}",
@@ -1645,7 +1639,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
 
             if any(
                 dados_identificacao[chave] == '-'
-                for chave in ('nome_dispositivo', 'numero_serie', 'mac')
+                for chave in ('numero_serie', 'mac')
             ):
                 url_rede = f'https://{ip}{CAMINHO_REDE}'
                 try:
@@ -1679,8 +1673,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             identificacao_ausente = [
                 rotulo
                 for chave, rotulo in (
-                    ('nome_dispositivo', 'nome do dispositivo'),
-                    ('numero_serie', 'número de série')
+                    ('numero_serie', 'número de série'),
                 )
                 if dados_identificacao[chave] == '-'
             ]
