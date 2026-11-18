@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.14"
+APP_VERSION = "1.0.15"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -951,7 +951,7 @@ COLUNAS_TABELA_COMPLETA = (
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
     ('nome', 'Identificação'),
-    ('nome_dispositivo', 'Nome do dispositivo'),
+    ('host', 'Nome do dispositivo'),
     ('modelo', 'Modelo'),
     ('firmware', 'Firmware'),
     ('tipo_conexao', 'Tipo Conexão'),
@@ -1101,7 +1101,7 @@ def gerar_html(
 <head>
     <meta charset=\"UTF-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-    <title>Relatório de Impressoras</title>
+    <title>Relatório Mensal de Impressoras</title>
     <style>
         html {{ zoom: 75%; }}
         * {{ box-sizing: border-box; font-family: Arial, sans-serif; }}
@@ -1433,7 +1433,7 @@ def montar_email_body(
     )
     return f"""<!doctype html>
 <html lang="pt-BR">
-<head><meta charset="utf-8"><title>Relatório mensal de impressoras</title></head>
+<head><meta charset="utf-8"><title>Relatório Mensal de Impressoras</title></head>
 <body style="font-family:Arial,sans-serif;color:#1e293b;">
     <p>Prezados,</p>
     <p>Encaminho o relatório técnico mensal dos equipamentos de impressão locados.</p>
@@ -1471,7 +1471,7 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
     linhas = [
         'Bom dia,',
         '',
-        'Segue relatório mensal das impressoras:',
+        'Segue Relatório Mensal de Impressoras:',
         f'Data: {data_consulta}',
         ''
     ]
@@ -1545,7 +1545,7 @@ def separar_emails(email):
     return enderecos
 
 
-def abrir_email(email, body, assunto='Relatório mensal de impressoras'):
+def abrir_email(email, body, assunto='Relatório Mensal de Impressoras'):
     enderecos = separar_emails(email)
     abrir_arquivo = getattr(os, 'startfile', None)
     if not callable(abrir_arquivo):
@@ -1794,7 +1794,7 @@ def construir_interface(config, caminho_config):
     cabecalho.columnconfigure(1, weight=1)
     tk.Label(
         cabecalho,
-        text='Relatório mensal de impressoras',
+        text='Relatório Mensal de Impressoras',
         font=('Arial', 16, 'bold'),
         fg='#0f4c81',
         bg='white'
@@ -2482,7 +2482,7 @@ def construir_interface(config, caminho_config):
         ('Gerenciar impressoras', abrir_configuracao_impressoras, '#475569'),
         ('Abrir relatório', abrir_relatorio, '#0f4c81'),
         ('Rascunho de e-mail', abrir_rascunho_email, '#1d4ed8'),
-        ('Abrir WhatsApp', abrir_conversa_whatsapp, '#16a34a'),
+        ('Enviar WhatsApp', abrir_conversa_whatsapp, '#16a34a'),
         ('Pasta dos relatórios', abrir_pasta_relatorios, '#475569'),
         ('Abrir configurações', abrir_configuracao, '#475569'),
     ]

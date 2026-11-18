@@ -652,6 +652,7 @@ Adaptador Ethernet Ethernet:
         }
         mensagem = app.montar_whatsapp_body([item, falha], "16/11/2026")
 
+        self.assertIn("Segue Relatório Mensal de Impressoras:", mensagem)
         for valor in (
             "WF-M5899 Series", "Setor A", "PRINTER-01",
             "192.0.2.220", "02:00:00:00:00:01", "11407", "11404"
@@ -841,7 +842,22 @@ Adaptador Ethernet Ethernet:
         self.assertIn('class="contador-paginas"', corpo)
         self.assertIn("background:#fff1b8", corpo)
         self.assertIn("Tecnologia &lt;teste&gt;", corpo)
-        self.assertIn("EPSONTEST01", corpo)
+        tabela_completa = app.BeautifulSoup(corpo, "html.parser").select_one(
+            "table.dados-impressora"
+        )
+        self.assertIsNotNone(tabela_completa)
+        cabecalho = [
+            celula.get_text(" ", strip=True)
+            for celula in tabela_completa.select("thead th")
+        ]
+        valores = [
+            celula.get_text(" ", strip=True)
+            for celula in tabela_completa.select("tbody tr:first-child td")
+        ]
+        self.assertEqual(
+            valores[cabecalho.index("Nome do dispositivo")], "PRINTER-01"
+        )
+        self.assertNotIn("EPSONTEST01", corpo)
         self.assertIn("SNTEST12345", corpo)
         self.assertIn(
             'href="https://192.0.2.220/PRESENTATION/ADVANCED/COMMON/TOP"',
@@ -866,6 +882,9 @@ Adaptador Ethernet Ethernet:
                 ["ti@example.com", "suporte@example.com"],
             )
             self.assertEqual(mensagem["X-Unsent"], "1")
+            self.assertEqual(
+                mensagem["Subject"], "Relatório Mensal de Impressoras"
+            )
             parte_html = mensagem.get_body(preferencelist=("html",))
             self.assertIsNotNone(parte_html)
             self.assertIn("Número total de páginas", parte_html.get_content())
@@ -1001,6 +1020,9 @@ Adaptador Ethernet Ethernet:
 
         self.assertIn("localizacao-setor", relatorio)
         self.assertIn("localizacao-ip", relatorio)
+        self.assertIn(
+            "<title>Relatório Mensal de Impressoras</title>", relatorio
+        )
         self.assertIn('<section class="tabela-final">', relatorio)
         self.assertLess(
             relatorio.index('<section class="tabela-final">'),
