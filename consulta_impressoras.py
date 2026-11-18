@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -361,38 +361,98 @@ def obter_faixas_de_rede_locais(ips_locais):
         "Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred "
         "| Select-Object IPAddress,PrefixLength | ConvertTo-Json -Compress"
     )
+    diretorio_sistema = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    powershell = str(
+        diretorio_sistema / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    )
+    adaptadores = None
     try:
         processo = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", comando],
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", comando],
             capture_output=True,
             check=True,
             text=True,
-            timeout=5,
+            timeout=15,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
         adaptadores = json.loads(processo.stdout or "[]")
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            "Não foi possível identificar a máscara da rede ativa do Windows."
-        ) from exc
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        pass
+
     if isinstance(adaptadores, dict):
         adaptadores = [adaptadores]
-    if not isinstance(adaptadores, list):
-        raise ValueError("Não foi possível interpretar os endereços dos adaptadores de rede.")
-
     redes = []
     ips_de_saida = set(ips_locais)
-    for adaptador in adaptadores:
-        if not isinstance(adaptador, dict):
-            continue
-        try:
-            endereco = ipaddress.ip_address(adaptador.get("IPAddress", ""))
-            prefixo = int(adaptador.get("PrefixLength"))
-            if endereco.version == 4 and str(endereco) in ips_de_saida:
-                redes.append(ipaddress.ip_network(f"{endereco}/{prefixo}", strict=False))
-        except (TypeError, ValueError):
-            continue
-    return redes
+    if isinstance(adaptadores, list):
+        for adaptador in adaptadores:
+            if not isinstance(adaptador, dict):
+                continue
+            try:
+                endereco = ipaddress.ip_address(adaptador.get("IPAddress", ""))
+                prefixo = int(adaptador.get("PrefixLength"))
+                if endereco.version == 4 and str(endereco) in ips_de_saida:
+                    redes.append(
+                        ipaddress.ip_network(f"{endereco}/{prefixo}", strict=False)
+                    )
+            except (TypeError, ValueError):
+                continue
+    if redes:
+        return redes
+
+    try:
+        processo = subprocess.run(
+            [str(diretorio_sistema / "ipconfig.exe")],
+            capture_output=True,
+            check=True,
+            encoding="oem",
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            "Não foi possível identificar a máscara da rede ativa do Windows "
+            "usando PowerShell nem ipconfig."
+        ) from exc
+
+    redes_ipconfig = []
+    for bloco in re.split(r"\r?\n\s*\r?\n", processo.stdout or ""):
+        enderecos = []
+        mascaras = []
+        for linha in bloco.splitlines():
+            rotulo = unicodedata.normalize("NFKD", linha.casefold())
+            rotulo = "".join(
+                caractere for caractere in rotulo
+                if not unicodedata.combining(caractere)
+            )
+            rotulo = re.sub(r"[^a-z0-9]+", " ", rotulo).strip()
+            correspondencias = re.findall(
+                r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)", linha
+            )
+            if (
+                "ipv4 address" in rotulo
+                or "endereco ipv4" in rotulo
+                or "direccion ipv4" in rotulo
+            ):
+                enderecos.extend(correspondencias)
+            elif (
+                "subnet mask" in rotulo
+                or "mascara de sub rede" in rotulo
+                or "mascara sub rede" in rotulo
+                or "mascara de subred" in rotulo
+            ):
+                mascaras.extend(correspondencias)
+        for endereco in enderecos:
+            if endereco not in ips_de_saida:
+                continue
+            for mascara in mascaras:
+                try:
+                    rede = ipaddress.ip_interface(f"{endereco}/{mascara}").network
+                except ValueError:
+                    continue
+                if rede not in redes_ipconfig:
+                    redes_ipconfig.append(rede)
+                break
+    return redes_ipconfig
 
 
 def linhas_usb_cadastradas(impressoras_usb, ips_resultados=None):

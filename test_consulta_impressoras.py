@@ -205,7 +205,28 @@ class ConsultaImpressorasTests(unittest.TestCase):
             redes = app.obter_faixas_de_rede_locais(["10.2.200.44"])
 
         self.assertEqual(redes, [app.ipaddress.ip_network("10.2.200.0/24")])
-        self.assertEqual(executar.call_args.kwargs["timeout"], 5)
+        self.assertEqual(executar.call_args.kwargs["timeout"], 15)
+
+    def test_usa_ipconfig_quando_powershell_nao_consegue_listar_a_rede(self):
+        saida_ipconfig = """
+Adaptador Ethernet Ethernet:
+   Endereço IPv4. . . . . . . . . . . . . . : 10.2.200.44
+   Máscara de Sub-rede . . . . . . . . . . . : 255.255.255.0
+"""
+        processo_ipconfig = app.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=saida_ipconfig, stderr=""
+        )
+        falha_powershell = app.subprocess.CalledProcessError(
+            1, ["powershell.exe"]
+        )
+        with patch.object(
+            app.subprocess, "run",
+            side_effect=[falha_powershell, processo_ipconfig]
+        ) as executar:
+            redes = app.obter_faixas_de_rede_locais(["10.2.200.44"])
+
+        self.assertEqual(redes, [app.ipaddress.ip_network("10.2.200.0/24")])
+        self.assertEqual(executar.call_count, 2)
 
     def test_faixa_personalizada_nao_e_substituida_pela_rede_ativa(self):
         cabo = {
