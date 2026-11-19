@@ -51,7 +51,7 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.16"
+APP_VERSION = "1.0.18"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -179,6 +179,7 @@ def validar_lista_impressoras(lista):
 
         nome = item.get("nome")
         setor = item.get("setor", "Não informado")
+        supervisor = item.get("supervisor", "")
         host = item.get("host")
         ip = item.get("ip")
         numero_serie = item.get("numero_serie", "")
@@ -187,6 +188,9 @@ def validar_lista_impressoras(lista):
         tinta_preto_manual = item.get("tinta_preto_manual", "")
         total_geral_consultado = item.get("total_geral_consultado", "-")
         tinta_preto_consultada = item.get("tinta_preto_consultada", "-")
+        situacao_consultada = item.get("situacao_consultada", "-")
+        if situacao_consultada not in ("ONLINE", "OFF-LINE"):
+            situacao_consultada = "-"
         tipo_conexao = item.get("tipo_conexao")
         if not all(isinstance(valor, str) and valor.strip() for valor in (nome, setor, host, ip)):
             raise ValueError(
@@ -194,6 +198,10 @@ def validar_lista_impressoras(lista):
             )
         if not isinstance(numero_serie, str):
             raise ValueError(f"O número de série da impressora {indice} deve ser texto.")
+        if supervisor is None:
+            supervisor = ""
+        if not isinstance(supervisor, str):
+            raise ValueError(f"O supervisor da impressora {indice} deve ser texto.")
         if not isinstance(mac, str):
             raise ValueError(f"O endereço MAC da impressora {indice} deve ser texto.")
         mac_normalizado = normalizar_mac(mac)
@@ -265,6 +273,7 @@ def validar_lista_impressoras(lista):
         impressoras_validadas.append({
             "nome": nome.strip(),
             "setor": setor.strip(),
+            "supervisor": supervisor.strip(),
             "host": host.strip(),
             "ip": ip_normalizado,
             "numero_serie": numero_serie.strip(),
@@ -273,10 +282,22 @@ def validar_lista_impressoras(lista):
             "total_geral_manual": total_geral_manual,
             "tinta_preto_manual": tinta_preto_manual,
             "total_geral_consultado": total_geral_consultado,
-            "tinta_preto_consultada": tinta_preto_consultada
+            "tinta_preto_consultada": tinta_preto_consultada,
+            "situacao_consultada": situacao_consultada
         })
 
     return impressoras_validadas
+
+
+def situacao_cadastrada(impressora):
+    tipo_conexao = str(
+        impressora.get("tipo_conexao")
+        or tipo_conexao_padrao(impressora.get("nome", ""))
+    ).strip().upper()
+    if tipo_conexao == "USB":
+        return "USB"
+    situacao = impressora.get("situacao_consultada")
+    return situacao if situacao in ("ONLINE", "OFF-LINE") else "-"
 
 
 def valores_contadores_cadastrados(impressora):
@@ -365,6 +386,10 @@ def atualizar_leituras_cadastradas(config, resultados):
             alterou = True
         if impressora.get("tinta_preto_consultada", "-") != tinta_preto:
             impressora["tinta_preto_consultada"] = tinta_preto
+            alterou = True
+        situacao = situacao_conexao(resultado)
+        if impressora.get("situacao_consultada", "-") != situacao:
+            impressora["situacao_consultada"] = situacao
             alterou = True
     return alterou
 
@@ -546,6 +571,7 @@ def linhas_usb_cadastradas(impressoras_usb, ips_resultados=None):
             continue
         linhas.append({
             "setor": limpar_texto(impressora.get("setor"), "Não informado"),
+            "supervisor": limpar_texto(impressora.get("supervisor")),
             "host": limpar_texto(impressora.get("host")),
             "ip": ip,
             "tipo_conexao": "USB",
@@ -556,6 +582,56 @@ def linhas_usb_cadastradas(impressoras_usb, ips_resultados=None):
             "status": "USB — não consultada (conexão local)",
         })
     return linhas
+
+
+def aplicar_dados_cadastro(resultados, impressoras_cadastradas):
+    """Atualiza setor e supervisor dos resultados com o cadastro atual (por IP)."""
+    cadastro_por_ip = {
+        limpar_texto(impressora.get("ip")): impressora
+        for impressora in impressoras_cadastradas or ()
+    }
+    for item in resultados or ():
+        impressora = cadastro_por_ip.get(limpar_texto(item.get("ip")))
+        if impressora is None:
+            continue
+        item["supervisor"] = limpar_texto(impressora.get("supervisor"))
+        item["setor"] = limpar_texto(impressora.get("setor"), "Não informado")
+    return resultados
+
+
+def situacao_conexao(item):
+    """Classifica a impressora como ONLINE, OFF-LINE ou USB (não consultada)."""
+    tipo_conexao = str(
+        item.get("tipo_conexao") or tipo_conexao_padrao(item.get("nome", ""))
+    ).strip().upper()
+    if tipo_conexao == "USB":
+        return "USB"
+    status = str(item.get("status") or "")
+    return "ONLINE" if status.startswith("Sucesso") else "OFF-LINE"
+
+
+CORES_SITUACAO = {
+    "ONLINE": "#22c55e",
+    "OFF-LINE": "#ef4444",
+    "USB": "#60a5fa",
+}
+
+
+def indicador_situacao_html(situacao, texto_estado=None):
+    cor = CORES_SITUACAO.get(situacao, "#94a3b8")
+    rotulo = "USB (local)" if situacao == "USB" else situacao
+    detalhe = limpar_texto(texto_estado)
+    complemento = (
+        f' <span style="font-weight:normal;opacity:.85">· {html.escape(detalhe)}</span>'
+        if detalhe != '-' and situacao == "ONLINE"
+        else ''
+    )
+    return (
+        f'<span class="indicador-situacao" style="display:inline-block;width:11px;height:11px;'
+        f'border-radius:50%;background:{cor};border:2px solid #fff;'
+        f'box-shadow:0 0 0 1px rgba(15,23,42,.35);vertical-align:middle;margin-right:6px"></span>'
+        f'<span style="vertical-align:middle">{html.escape(rotulo)}</span>{complemento}'
+    )
 
 
 def impressoras_usb_pendentes(impressoras_usb):
@@ -763,20 +839,14 @@ def extrair_estado_produto(html):
     dados = {
         'modelo': 'Não identificado',
         'estado_impressora': '-',
-        'estado_digitalizador': '-',
         'tinta_preto': '-',
         'caixa_manutencao': '-',
         'nivel_papel': '-',
-        'nivel_papel_bandeja1': '-',
-        'tamanho_papel': '-',
-        'tipo_papel': '-',
         'firmware': '-',
         'mac': '-',
         'nome_dispositivo': '-',
         'numero_serie': '-',
         'data_hora': '-',
-        'epson_connect': '-',
-        'leitor_cartao': '-'
     }
 
     titulo = soup.find('title')
@@ -789,17 +859,11 @@ def extrair_estado_produto(html):
 
     padroes = {
         'estado_impressora': r'Estado da impressora\s*[:：]\s*([^\n]+)',
-        'estado_digitalizador': r'Estado do digitalizador\s*[:：]\s*([^\n]+)',
         'caixa_manutencao': r'Caixa de manutenção\s*[:：]\s*([^\n]+)',
         'nivel_papel': r'Nível de Papel Restante\s*[:：]\s*([^\n]+)',
-        'nivel_papel_bandeja1': r'Aliment\.?\s*1[\s\S]{0,30}Nível de Papel Restante\s*[:：]\s*([^\n]+)',
-        'tamanho_papel': r'Tamanho do papel\s*[:：]\s*([^\n]+)',
-        'tipo_papel': r'Tipo papel\s*[:：]\s*([^\n]+)',
         'firmware': r'Firmware\s*[:：]\s*([^\n]+)',
         'mac': r'(?:Endereço\s+)?MAC(?:\s+da\s+rede)?\s*[:：]\s*([0-9A-Fa-f:.-]{12,17})',
         'data_hora': r'Data e Hora\s*[:：]\s*([^\n]+)',
-        'epson_connect': r'Estado de Epson Connect\s*[:：]\s*([^\n]+)',
-        'leitor_cartao': r'Status do leitor de cartão\s*[:：]\s*([^\n]+)'
     }
 
     for chave, padrao in padroes.items():
@@ -820,7 +884,6 @@ def extrair_contadores(html):
     dados = {
         'total_geral': '-',
         'total_pb': '-',
-        'total_cor': '-',
         'total_2faces': '-',
         'total_1face': '-'
     }
@@ -836,7 +899,6 @@ def extrair_contadores(html):
     chaves_por_rotulo = {
         'numero total de paginas': 'total_geral',
         'numero total de paginas a p&b': 'total_pb',
-        'numero total de paginas a cor': 'total_cor',
         'numero total de paginas de impressao em 2 faces': 'total_2faces',
         'numero total de paginas de impressao em 1 face': 'total_1face'
     }
@@ -863,6 +925,7 @@ def gerar_alertas(resultados, limite_tinta=20):
         alertas.append({
             'nome': item.get('nome', 'Impressora'),
             'setor': limpar_texto(item.get('setor')),
+            'supervisor': limpar_texto(item.get('supervisor')),
             'host': limpar_texto(item.get('host')),
             'ip': limpar_texto(item.get('ip')),
             'mac': limpar_texto(item.get('mac')),
@@ -937,6 +1000,7 @@ def gerar_alertas(resultados, limite_tinta=20):
 def valores_linha_alerta_painel(alerta):
     return (
         alerta["tipo"],
+        limpar_texto(alerta.get("supervisor")),
         alerta["setor"],
         alerta["nome"],
         alerta["ip"],
@@ -948,9 +1012,10 @@ def valores_linha_alerta_painel(alerta):
 
 
 COLUNAS_TABELA_COMPLETA = (
+    ('estado_impressora', 'Estado da impressora'),
+    ('supervisor', 'Supervisor'),
     ('setor', 'Setor físico'),
     ('host', 'Hostname'),
-    ('nome', 'Identificação'),
     ('modelo', 'Modelo'),
     ('firmware', 'Firmware'),
     ('tipo_conexao', 'Tipo Conexão'),
@@ -960,40 +1025,78 @@ COLUNAS_TABELA_COMPLETA = (
     ('tinta_preto', 'Tinta preta'),
     ('total_geral', 'Número total de páginas'),
     ('total_pb', 'P&B'),
-    ('total_cor', 'Cor'),
     ('total_2faces', 'Impressão em 2 faces'),
     ('total_1face', 'Impressão em 1 face'),
     ('status', 'Status'),
-    ('estado_impressora', 'Estado da impressora'),
-    ('estado_digitalizador', 'Estado do digitalizador'),
-    ('leitor_cartao', 'Leitor de cartão'),
-    ('epson_connect', 'Epson Connect'),
     ('caixa_manutencao', 'Caixa de manutenção'),
     ('nivel_papel', 'Nível de papel geral'),
-    ('nivel_papel_bandeja1', 'Bandeja 1'),
-    ('tamanho_papel', 'Tamanho do papel'),
-    ('tipo_papel', 'Tipo de papel'),
     ('data_hora', 'Data/hora da impressora')
 )
 
 
+COLUNAS_FIXAS_TABELA = ('estado_impressora', 'supervisor', 'setor', 'host')
+
+
+def texto_estado_tabela(item):
+    situacao = situacao_conexao(item)
+    texto = "USB (local)" if situacao == "USB" else situacao
+    estado = limpar_texto(item.get('estado_impressora'))
+    if situacao == "ONLINE" and estado != '-':
+        texto += f" · {estado}"
+    return texto
+
+
+def posicoes_colunas_fixas(resultados):
+    """Calcula (esquerda, largura) em px das colunas fixas pelo maior texto de cada uma."""
+    rotulos = dict(COLUNAS_TABELA_COMPLETA)
+    posicoes = {}
+    esquerda = 0
+    for chave in COLUNAS_FIXAS_TABELA:
+        textos = [rotulos[chave]]
+        for item in resultados:
+            if chave == 'estado_impressora':
+                textos.append(texto_estado_tabela(item) + '   ')  # bolinha
+            else:
+                textos.append(limpar_texto(item.get(chave)))
+        largura = max(70, min(320, round(max(map(len, textos)) * 8 + 24)))
+        posicoes[chave] = (esquerda, largura)
+        esquerda += largura
+    return posicoes
+
+
+def estilo_coluna_fixa(chave, posicoes, cabecalho=False):
+    esquerda, largura = posicoes[chave]
+    estilo = (
+        f'position:sticky;left:{esquerda}px;z-index:{3 if cabecalho else 2};'
+        f'width:{largura}px;min-width:{largura}px;max-width:{largura}px;'
+        'box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;'
+    )
+    if chave == 'host':
+        estilo += 'box-shadow:4px 0 6px -2px rgba(15,23,42,.35);'
+    return estilo
+
+
 def gerar_tabela_completa(resultados, limite_tinta=20):
     cabecalho = []
-    contadores = {'total_pb', 'total_cor', 'total_2faces', 'total_1face'}
+    contadores = {'total_pb', 'total_2faces', 'total_1face'}
     colunas_contadores_destaque = contadores | {'tinta_preto'}
     identificacao = {
-        'setor', 'host', 'ip', 'tipo_conexao', 'nome', 'nome_dispositivo',
+        'estado_impressora', 'supervisor', 'setor', 'host', 'ip',
+        'tipo_conexao', 'nome', 'nome_dispositivo',
         'numero_serie', 'modelo', 'mac', 'firmware'
     }
     alertas_por_ip = {
         alerta['ip']: alerta['tipo']
         for alerta in gerar_alertas(resultados, limite_tinta)
     }
+    posicoes_fixas = posicoes_colunas_fixas(resultados)
     for chave, rotulo in COLUNAS_TABELA_COMPLETA:
         estilo = (
             'border:1px solid #cbd5e1;padding:8px 10px;text-align:left;'
             'white-space:nowrap;background:#1d4ed8;color:#fff;font-weight:bold;'
         )
+        if chave in COLUNAS_FIXAS_TABELA:
+            estilo += estilo_coluna_fixa(chave, posicoes_fixas, cabecalho=True)
         if chave == 'total_geral':
             estilo = (
                 'border:1px solid #cbd5e1;padding:8px 10px;text-align:left;'
@@ -1005,7 +1108,7 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
                 'white-space:nowrap;background:#dbeafe;color:#1e3a8a;'
             )
         cabecalho.append(
-            f'<th scope="col" style="{estilo}">{escapar_html(rotulo)}</th>'
+            f'<th scope="col"{' class="coluna-fixa"' if chave in COLUNAS_FIXAS_TABELA else ''} style="{estilo}">{escapar_html(rotulo)}</th>'
         )
 
     linhas = []
@@ -1048,9 +1151,16 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
                 estilo += 'background:#eff6ff;color:#1e3a8a;'
             elif chave in identificacao:
                 estilo += 'background:#f8fafc;font-weight:bold;'
+            if chave in COLUNAS_FIXAS_TABELA:
+                estilo += estilo_coluna_fixa(chave, posicoes_fixas)
+                classe = ' class="coluna-fixa"'
             valor = (
                 link_gestao_impressora_html(item.get(chave))
                 if chave == 'ip'
+                else indicador_situacao_html(
+                    situacao_conexao(item), item.get('estado_impressora')
+                )
+                if chave == 'estado_impressora'
                 else escapar_html(tipo_conexao)
                 if chave == 'tipo_conexao'
                 else escapar_html(item.get(chave))
@@ -1072,11 +1182,93 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
         '<div class="tabela-horizontal" '
         'style="max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;">'
         '<table class="dados-impressora" '
-        'style="border-collapse:collapse;table-layout:auto;min-width:2400px;'
+        'style="border-collapse:separate;border-spacing:0;table-layout:auto;width:max-content;min-width:100%;'
         'font:13px Arial,sans-serif;">'
         f'<thead><tr>{"".join(cabecalho)}</tr></thead>'
         f'<tbody>{"".join(linhas)}</tbody></table></div>'
     )
+
+
+NOME_ARQUIVO_RELATORIO_HTML = "Clique Aqui Contadores.html"
+TITULO_RELATORIO = "Inventário de Impressoras CD05"
+SUBTITULO_RELATORIO = "Envio ao fornecedor de locação"
+
+
+def icone_impressora_svg(situacao):
+    cor = CORES_SITUACAO.get(situacao, "#94a3b8")
+    opacidade = "1" if situacao == "ONLINE" else ".6"
+    return (
+        f'<svg class="icone-impressora" viewBox="0 0 64 64" width="72" height="72" '
+        f'aria-hidden="true" style="opacity:{opacidade}">'
+        '<rect x="17" y="6" width="30" height="16" rx="2" fill="#e2e8f0" stroke="#94a3b8"/>'
+        '<rect x="5" y="20" width="54" height="26" rx="6" fill="#f8fafc" stroke="#94a3b8"/>'
+        '<rect x="5" y="20" width="54" height="7" rx="3" fill="#cbd5e1"/>'
+        '<rect x="15" y="38" width="34" height="20" rx="2" fill="#ffffff" stroke="#94a3b8"/>'
+        '<line x1="21" y1="45" x2="43" y2="45" stroke="#cbd5e1" stroke-width="2"/>'
+        '<line x1="21" y1="51" x2="37" y2="51" stroke="#cbd5e1" stroke-width="2"/>'
+        f'<circle cx="50" cy="33" r="4" fill="{cor}" stroke="#ffffff" stroke-width="1.5"/>'
+        '</svg>'
+    )
+
+
+def indicadores_mapa_html(item, limite_tinta=20):
+    texto_tinta = limpar_texto(item.get('tinta_preto'))
+    tinta = extrair_porcentagem(texto_tinta)
+    if tinta is None:
+        largura, cor_tinta = 0, "#64748b"
+    else:
+        largura = max(0, min(100, tinta))
+        cor_tinta = "#ef4444" if tinta <= limite_tinta else "#22c55e"
+    return (
+        '<div class="mapa-dados">'
+        '<div class="mapa-dado"><span>Tinta preta</span>'
+        f'<strong>{escapar_html(texto_tinta)}</strong></div>'
+        '<div class="mapa-barra" role="img" '
+        f'aria-label="Nível de tinta preta: {escapar_html(texto_tinta)}">'
+        f'<div style="width:{largura}%;background:{cor_tinta}"></div></div>'
+        '<div class="mapa-dado"><span>Páginas</span>'
+        f'<strong>{escapar_html(item.get("total_geral"))}</strong></div>'
+        '</div>'
+    )
+
+
+def gerar_mapa_impressoras(itens, limite_tinta=20):
+    if not itens:
+        return ''
+    contagem = {"ONLINE": 0, "OFF-LINE": 0, "USB": 0}
+    blocos = []
+    for item in itens:
+        situacao = situacao_conexao(item)
+        contagem[situacao] += 1
+        cor = CORES_SITUACAO[situacao]
+        rotulo = "USB (local)" if situacao == "USB" else situacao
+        blocos.append(
+            f'<div class="mapa-item mapa-{situacao.lower().replace("-", "")}" '
+            f'style="border-top-color:{cor}">'
+            '<div class="mapa-rotulo">'
+            f'<div class="mapa-setor">{escapar_html(item.get("setor"))}</div>'
+            f'<div class="mapa-linha"><span>Hostname</span> {escapar_html(item.get("host"))}</div>'
+            f'<div class="mapa-linha"><span>Supervisor</span> {escapar_html(item.get("supervisor"))}</div>'
+            '</div>'
+            f'{icone_impressora_svg(situacao)}'
+            f'{indicadores_mapa_html(item, limite_tinta)}'
+            f'<div class="mapa-situacao"><span class="mapa-bolinha" style="background:{cor}"></span>'
+            f'{escapar_html(rotulo)}</div>'
+            '</div>'
+        )
+    return f"""
+        <section class="mapa-impressoras" aria-label="Situação das impressoras">
+            <div class="mapa-cabecalho">
+                <h2>Situação das impressoras</h2>
+                <div class="mapa-legenda">
+                    <span><span class="mapa-bolinha" style="background:{CORES_SITUACAO['ONLINE']}"></span>ONLINE: {contagem['ONLINE']}</span>
+                    <span><span class="mapa-bolinha" style="background:{CORES_SITUACAO['OFF-LINE']}"></span>OFF-LINE: {contagem['OFF-LINE']}</span>
+                    <span><span class="mapa-bolinha" style="background:{CORES_SITUACAO['USB']}"></span>USB (local): {contagem['USB']}</span>
+                </div>
+            </div>
+            <div class="mapa-grade">{''.join(blocos)}</div>
+        </section>
+"""
 
 
 def gerar_html(
@@ -1100,7 +1292,7 @@ def gerar_html(
 <head>
     <meta charset=\"UTF-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-    <title>Relatório Mensal de Impressoras</title>
+    <title>{escapar_html(TITULO_RELATORIO)}</title>
     <style>
         html {{ zoom: 75%; }}
         * {{ box-sizing: border-box; font-family: Arial, sans-serif; }}
@@ -1155,18 +1347,40 @@ def gerar_html(
         .alerta-box h3 {{ margin: 0 0 12px; color: #9a4d00; }}
         .alerta-item {{ padding: 8px 0; border-bottom: 1px dashed #fed7aa; }}
         .alerta-item:last-child {{ border-bottom: none; }}
-        .tabela-final {{ max-width: 1000px; margin: 24px auto; padding: 20px; background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; }}
+        .tabela-final {{ box-sizing: border-box; margin: 24px 0; padding: 20px; background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; }}
         .tabela-final h2 {{ margin: 0 0 8px; color: #0f4c81; }}
         .tabela-final p {{ margin: 0 0 18px; color: #475569; }}
         .rodape {{ text-align: center; padding: 20px; font-size: 12px; color: #64748b; }}
+        .localizacao-supervisor {{ background: #f0fdf4; color: #166534; border-color: #22c55e; }}
+        .mapa-impressoras {{ background: radial-gradient(circle at 50% 0%, #1e3a8a 0%, #0b1f4d 55%, #071433 100%); border-radius: 14px; padding: 20px 22px 24px; margin-bottom: 20px; color: #e2e8f0; box-shadow: 0 4px 14px rgba(7,20,51,.35); }}
+        .mapa-cabecalho {{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; }}
+        .mapa-cabecalho h2 {{ margin: 0; font-size: 20px; color: #fff; letter-spacing: .3px; }}
+        .mapa-legenda {{ display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; font-weight: 700; }}
+        .mapa-bolinha {{ display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; box-shadow: 0 0 6px currentColor; border: 2px solid rgba(255,255,255,.85); }}
+        .mapa-grade {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }}
+        .mapa-item {{ background: rgba(15,23,42,.55); border: 1px solid rgba(148,163,184,.35); border-top: 5px solid; border-radius: 12px; padding: 12px; text-align: center; }}
+        .mapa-rotulo {{ background: linear-gradient(180deg, #dbeafe, #bfdbfe); color: #0f172a; border-radius: 22px; padding: 8px 10px; margin-bottom: 8px; }}
+        .mapa-setor {{ font-weight: 800; font-size: 14px; text-transform: uppercase; overflow-wrap: anywhere; }}
+        .mapa-linha {{ font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }}
+        .mapa-linha span {{ color: #1e40af; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }}
+        .mapa-situacao {{ display: inline-block; margin-top: 4px; padding: 4px 12px; border-radius: 999px; background: rgba(2,6,23,.6); font-weight: 800; font-size: 13px; letter-spacing: .6px; }}
+        .mapa-offline .mapa-situacao {{ color: #fecaca; }}
+        .mapa-online .mapa-situacao {{ color: #bbf7d0; }}
+        .mapa-usb .mapa-situacao {{ color: #bfdbfe; }}
+        .mapa-dados {{ background: rgba(2,6,23,.45); border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; text-align: left; }}
+        .mapa-dado {{ display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }}
+        .mapa-dado span {{ color: #93c5fd; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; align-self: center; }}
+        .mapa-dado strong {{ color: #fff; font-size: 14px; }}
+        .mapa-barra {{ height: 8px; background: rgba(148,163,184,.3); border-radius: 999px; overflow: hidden; margin: 4px 0 8px; }}
+        .mapa-barra div {{ height: 100%; border-radius: 999px; }}
         @media (max-width: 768px) {{ .card-header {{ display: block; }} .status {{ display: inline-block; margin-top: 10px; }} }}
     </style>
 </head>
 <body>
     <div class=\"container\">
         <div class=\"cabecalho\">
-            <h1>🖨️ Relatório Mensal de Impressoras</h1>
-            <p>Inventário técnico, insumos, papel e contadores de impressão</p>
+            <h1>🖨️ {escapar_html(TITULO_RELATORIO)}</h1>
+            <p>{escapar_html(SUBTITULO_RELATORIO)}</p>
         </div>
 
         <div class=\"info-bar\">
@@ -1182,6 +1396,8 @@ def gerar_html(
             <p class=\"observacao\">O relatório detalha os equipamentos consultados; impressoras USB aparecem como não consultadas, com páginas e tinta digitadas no cadastro quando informadas.</p>
         </div>
 """
+
+    html += gerar_mapa_impressoras(resultados + linhas_usb, limite_tinta)
 
     html += f"""
         <section class="tabela-final">
@@ -1207,7 +1423,8 @@ def gerar_html(
                         <span class=\"acao-equipamento\">{escapar_html(alerta['nome'])} — {escapar_html(alerta['modelo'])}</span>
                     </div>
                     <p class=\"acao-detalhe\">
-                        <strong>Setor físico:</strong> {escapar_html(alerta['setor'])}
+                        <strong>Supervisor:</strong> {escapar_html(alerta.get('supervisor'))}
+                        &nbsp; | &nbsp; <strong>Setor físico:</strong> {escapar_html(alerta['setor'])}
                         &nbsp; | &nbsp; <strong>Endereço IP:</strong> {link_gestao_impressora_html(alerta['ip'])}
                         &nbsp; | &nbsp; <strong>Hostname:</strong> {escapar_html(alerta['host'])}
                     </p>
@@ -1250,6 +1467,10 @@ def gerar_html(
             </div>
             <div class=\"card-body\">
                 <div class=\"localizacao-destaque\">
+                    <div class=\"localizacao-item localizacao-supervisor\">
+                        <span>SUPERVISOR</span>
+                        <strong>{escapar_html(r.get('supervisor'))}</strong>
+                    </div>
                     <div class=\"localizacao-item localizacao-setor\">
                         <span>SETOR FÍSICO</span>
                         <strong>{escapar_html(r.get('setor'))}</strong>
@@ -1272,9 +1493,6 @@ def gerar_html(
                     <div>
                         <div class=\"titulo-secao\">✅ Estado do equipamento</div>
                         <div class=\"item\"><div class=\"label\">Impressora</div><div class=\"valor\">{escapar_html(r['estado_impressora'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Digitalizador</div><div class=\"valor\">{escapar_html(r['estado_digitalizador'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Leitor de cartão</div><div class=\"valor\">{escapar_html(r['leitor_cartao'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Epson Connect</div><div class=\"valor\">{escapar_html(r['epson_connect'])}</div></div>
                     </div>
                 </div>
 
@@ -1288,15 +1506,12 @@ def gerar_html(
                     <div>
                         <div class=\"titulo-secao\">📄 Papel</div>
                         <div class=\"item\"><div class=\"label\">Nível de papel geral</div><div class=\"valor\">{escapar_html(r['nivel_papel'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Bandeja 1</div><div class=\"valor\">{escapar_html(r['nivel_papel_bandeja1'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Tamanho / Tipo</div><div class=\"valor\">{escapar_html(r['tamanho_papel'])} / {escapar_html(r['tipo_papel'])}</div></div>
                     </div>
 
                     <div>
                         <div class=\"titulo-secao\">📊 Contadores</div>
                         <div class=\"item\"><div class=\"label\">Total geral</div><div class=\"valor\" style=\"font-size:16px; color:#0f4c81\">{escapar_html(r['total_geral'])}</div></div>
                         <div class=\"item\"><div class=\"label\">P&B</div><div class=\"valor\">{escapar_html(r['total_pb'])}</div></div>
-                        <div class=\"item\"><div class=\"label\">Cor</div><div class=\"valor\">{escapar_html(r['total_cor'])}</div></div>
                         <div class=\"item\"><div class=\"label\">2 faces / 1 face</div><div class=\"valor\">{escapar_html(r['total_2faces'])} / {escapar_html(r['total_1face'])}</div></div>
                     </div>
                 </div>
@@ -1329,31 +1544,24 @@ def salvar_csv(resultados, caminho, impressoras_usb=None):
         {limpar_texto(item.get("ip")) for item in resultados}
     )
     colunas = [
+        ('supervisor', 'Supervisor'),
         ('setor', 'Setor físico'),
         ('host', 'Hostname'),
         ('ip', 'IP'),
-        ('nome', 'Identificação'),
         ('numero_serie', 'Número de série'),
         ('modelo', 'Modelo'),
         ('mac', 'MAC'),
         ('firmware', 'Firmware'),
         ('total_geral', 'Total geral'),
         ('total_pb', 'Total P&B'),
-        ('total_cor', 'Total cor'),
         ('total_2faces', 'Total 2 faces'),
         ('total_1face', 'Total 1 face'),
         ('status', 'Status'),
         ('estado_impressora', 'Estado da impressora'),
-        ('estado_digitalizador', 'Estado do digitalizador'),
         ('tinta_preto', 'Tinta preta'),
         ('caixa_manutencao', 'Caixa de manutenção'),
         ('nivel_papel', 'Nível de papel'),
-        ('nivel_papel_bandeja1', 'Nível da bandeja 1'),
-        ('tamanho_papel', 'Tamanho do papel'),
-        ('tipo_papel', 'Tipo de papel'),
         ('data_hora', 'Data/hora da impressora'),
-        ('epson_connect', 'Epson Connect'),
-        ('leitor_cartao', 'Leitor de cartão')
     ]
     caminho = Path(caminho)
     with caminho.open('w', newline='', encoding='utf-8-sig') as arquivo:
@@ -1408,6 +1616,7 @@ def atualizar_relatorios_salvos(
 ):
     if resultados is None or caminho_html is None or caminho_csv is None:
         raise ValueError("Não há consulta concluída para atualizar os relatórios.")
+    aplicar_dados_cadastro(resultados, impressoras_usb)
     html_relatorio = gerar_html(
         resultados,
         data_consulta,
@@ -1485,7 +1694,8 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
             ip = limpar_texto(item.get('ip'))
             linhas.extend([
                 f"*{limpar_texto(item.get('nome'), 'Impressora')} — SEM COMUNICAÇÃO*",
-                f"Setor: {limpar_texto(item.get('setor'))}",
+                f"Setor: {limpar_texto(item.get('setor'))} | "
+                f"Supervisor: {limpar_texto(item.get('supervisor'))}",
                 f"Máquina: {limpar_texto(item.get('host'))}",
                 f"IP: {ip} | Gestão: {url_gestao_impressora(ip) or '-'} | "
                 f"MAC: {limpar_texto(item.get('mac'))}",
@@ -1501,8 +1711,8 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
     for item in itens_relatorio:
         ip = limpar_texto(item.get('ip'))
         linhas.extend([
-            f"Identificação: {limpar_texto(item.get('nome'), 'Impressora')} | Modelo: {limpar_texto(item.get('modelo'))}",
-            f"Setor físico: {limpar_texto(item.get('setor'))}",
+            f"Setor físico: {limpar_texto(item.get('setor'))} | "
+            f"Supervisor: {limpar_texto(item.get('supervisor'))}",
             f"Hostname: {limpar_texto(item.get('host'))} | IP: {ip} | "
             f"Gestão: {url_gestao_impressora(ip) or '-'} | "
             f"MAC: {limpar_texto(item.get('mac'))}",
@@ -1512,7 +1722,7 @@ def montar_whatsapp_body(resultados, data_consulta, impressoras_usb=None):
             f"Tinta preta: {limpar_texto(item.get('tinta_preto'))}",
             (
                 f"Contadores — Total: {limpar_texto(item.get('total_geral'))} | "
-                f"P&B: {limpar_texto(item.get('total_pb'))} | Cor: {limpar_texto(item.get('total_cor'))} | "
+                f"P&B: {limpar_texto(item.get('total_pb'))} | "
                 f"2 faces: {limpar_texto(item.get('total_2faces'))} | "
                 f"1 face: {limpar_texto(item.get('total_1face'))}"
             ),
@@ -1592,6 +1802,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
         setor = imp.get('setor', 'Não informado')
         ip = imp['ip']
         host = imp['host']
+        supervisor = limpar_texto(imp.get('supervisor'))
         try:
             url_estado = f'https://{ip}{CAMINHO_ESTADO}'
             resp_estado = requests.get(url_estado, timeout=8, verify=False)
@@ -1599,21 +1810,21 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 resultados.append({
                     'nome': nome,
                     'setor': setor,
+                    'supervisor': supervisor,
                     'ip': ip,
                     'host': host,
                     'tipo_conexao': (
                         imp.get('tipo_conexao') or tipo_conexao_padrao(nome)
                     ),
                     'status': f'Erro {resp_estado.status_code}',
-                    'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
+                    'modelo': '-', 'estado_impressora': '-',
                     'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
-                    'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
                     'firmware': '-', 'mac': normalizar_mac(imp.get('mac')) or '-',
                     'nome_dispositivo': '-',
                     'numero_serie': limpar_texto(imp.get('numero_serie')),
-                    'data_hora': '-', 'epson_connect': '-',
-                    'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
-                    'total_cor': '-', 'total_2faces': '-', 'total_1face': '-'
+                    'data_hora': '-',
+                    'total_geral': '-', 'total_pb': '-',
+                    'total_2faces': '-', 'total_1face': '-'
                 })
                 continue
 
@@ -1626,7 +1837,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             resp_contador = requests.get(url_contador, timeout=8, verify=False)
 
             dados_contador = {
-                'total_geral': '-', 'total_pb': '-', 'total_cor': '-',
+                'total_geral': '-', 'total_pb': '-',
                 'total_2faces': '-', 'total_1face': '-'
             }
             avisos_parciais = []
@@ -1689,6 +1900,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             resultados.append({
                 'nome': nome,
                 'setor': setor,
+                'supervisor': supervisor,
                 'ip': ip,
                 'host': host,
                 'tipo_conexao': (
@@ -1699,21 +1911,14 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
                 'numero_serie': dados_identificacao['numero_serie'],
                 'modelo': limpar_texto(dados_estado.get('modelo')),
                 'estado_impressora': limpar_texto(dados_estado.get('estado_impressora')),
-                'estado_digitalizador': limpar_texto(dados_estado.get('estado_digitalizador')),
                 'tinta_preto': limpar_texto(dados_estado.get('tinta_preto')),
                 'caixa_manutencao': limpar_texto(dados_estado.get('caixa_manutencao')),
                 'nivel_papel': limpar_texto(dados_estado.get('nivel_papel')),
-                'nivel_papel_bandeja1': limpar_texto(dados_estado.get('nivel_papel_bandeja1')),
-                'tamanho_papel': limpar_texto(dados_estado.get('tamanho_papel')),
-                'tipo_papel': limpar_texto(dados_estado.get('tipo_papel')),
                 'firmware': limpar_texto(dados_estado.get('firmware')),
                 'mac': dados_identificacao['mac'],
                 'data_hora': limpar_texto(dados_estado.get('data_hora')),
-                'epson_connect': limpar_texto(dados_estado.get('epson_connect')),
-                'leitor_cartao': limpar_texto(dados_estado.get('leitor_cartao')),
                 'total_geral': limpar_texto(dados_contador.get('total_geral')),
                 'total_pb': limpar_texto(dados_contador.get('total_pb')),
-                'total_cor': limpar_texto(dados_contador.get('total_cor')),
                 'total_2faces': limpar_texto(dados_contador.get('total_2faces')),
                 'total_1face': limpar_texto(dados_contador.get('total_1face'))
             })
@@ -1721,21 +1926,21 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
             resultados.append({
                 'nome': nome,
                 'setor': setor,
+                'supervisor': supervisor,
                 'ip': ip,
                 'host': host,
                 'tipo_conexao': (
                     imp.get('tipo_conexao') or tipo_conexao_padrao(nome)
                 ),
                 'status': f'Falha de comunicação: {exc}',
-                'modelo': '-', 'estado_impressora': '-', 'estado_digitalizador': '-',
+                'modelo': '-', 'estado_impressora': '-',
                 'tinta_preto': '-', 'caixa_manutencao': '-', 'nivel_papel': '-',
-                'nivel_papel_bandeja1': '-', 'tamanho_papel': '-', 'tipo_papel': '-',
                 'firmware': '-', 'mac': normalizar_mac(imp.get('mac')) or '-',
                 'nome_dispositivo': '-',
                 'numero_serie': limpar_texto(imp.get('numero_serie')),
-                'data_hora': '-', 'epson_connect': '-',
-                'leitor_cartao': '-', 'total_geral': '-', 'total_pb': '-',
-                'total_cor': '-', 'total_2faces': '-', 'total_1face': '-'
+                'data_hora': '-',
+                'total_geral': '-', 'total_pb': '-',
+                'total_2faces': '-', 'total_1face': '-'
             })
         finally:
             if progress_callback:
@@ -1881,9 +2086,10 @@ def construir_interface(config, caminho_config):
     falhas_frame.grid(row=7, column=0, sticky='ew', pady=(0, 6))
     falhas_frame.columnconfigure(0, weight=1)
     colunas_alertas = (
-        'tipo', 'setor', 'nome', 'ip', 'host',
+        'tipo', 'supervisor', 'setor', 'nome', 'ip', 'host',
         'numero_serie', 'modelo', 'mac'
     )
+    COLUNA_IP_PAINEL = f"#{colunas_alertas.index('ip') + 1}"
     falhas_lista = ttk.Treeview(
         falhas_frame,
         columns=colunas_alertas,
@@ -1907,6 +2113,7 @@ def construir_interface(config, caminho_config):
     )
     for coluna, titulo, largura in (
         ('tipo', 'Alerta', 145),
+        ('supervisor', 'Supervisor', 120),
         ('setor', 'Setor físico', 140),
         ('nome', 'Impressora', 150),
         ('ip', 'IP (clique para abrir)', 190),
@@ -1942,7 +2149,7 @@ def construir_interface(config, caminho_config):
     def abrir_ip_da_linha(event):
         if (
             falhas_lista.identify_region(event.x, event.y) != 'cell'
-            or falhas_lista.identify_column(event.x) != '#4'
+            or falhas_lista.identify_column(event.x) != COLUNA_IP_PAINEL
         ):
             return
         iid = falhas_lista.identify_row(event.y)
@@ -1961,7 +2168,7 @@ def construir_interface(config, caminho_config):
     def atualizar_cursor_ip(event):
         sobre_ip = (
             falhas_lista.identify_region(event.x, event.y) == 'cell'
-            and falhas_lista.identify_column(event.x) == '#4'
+            and falhas_lista.identify_column(event.x) == COLUNA_IP_PAINEL
             and bool(falhas_lista.identify_row(event.y))
         )
         falhas_lista.configure(cursor='hand2' if sobre_ip else '')
@@ -2108,21 +2315,46 @@ def construir_interface(config, caminho_config):
 
         janela = tk.Toplevel(root)
         janela.title('Lista de impressoras da unidade')
-        janela.geometry('1180x460')
-        janela.minsize(1060, 400)
+        janela.geometry('1300x460')
+        janela.minsize(1180, 400)
         janela.transient(root)
         janela.columnconfigure(0, weight=1)
         janela.rowconfigure(0, weight=1)
 
         lista_editada = [dict(item) for item in config['impressoras']]
         colunas = (
-            'nome', 'setor', 'host', 'ip', 'numero_serie', 'tipo_conexao',
-            'total_geral_manual', 'tinta_preto_manual'
+            'setor', 'supervisor', 'host', 'ip', 'numero_serie',
+            'tipo_conexao', 'total_geral_manual', 'tinta_preto_manual'
         )
-        tabela = ttk.Treeview(janela, columns=colunas, show='headings', selectmode='browse')
+        tabela = ttk.Treeview(
+            janela, columns=colunas, show='tree headings', selectmode='browse'
+        )
+        tabela.heading('#0', text='Estado da impressora', anchor='w')
+        tabela.column('#0', width=170, minwidth=150, anchor='w', stretch=False)
+
+        def criar_bolinha(cor):
+            imagem = tk.PhotoImage(master=janela, width=14, height=14)
+            for y in range(14):
+                for x in range(14):
+                    distancia = (x - 6.5) ** 2 + (y - 6.5) ** 2
+                    if distancia <= 30:
+                        imagem.put(cor, (x, y))
+                    elif distancia <= 46:
+                        imagem.put('#ffffff', (x, y))
+            return imagem
+
+        bolinhas = {
+            situacao: criar_bolinha(cor) for situacao, cor in CORES_SITUACAO.items()
+        }
+        bolinhas['-'] = criar_bolinha('#94a3b8')
+        rotulos_situacao = {
+            'ONLINE': 'ONLINE', 'OFF-LINE': 'OFF-LINE',
+            'USB': 'USB (local)', '-': 'Não consultada'
+        }
+        janela.bolinhas = bolinhas
         for coluna, titulo, largura in (
-            ('nome', 'Identificação', 150),
             ('setor', 'Setor físico', 150),
+            ('supervisor', 'Supervisor', 120),
             ('host', 'Hostname', 170),
             ('ip', 'IP', 130),
             ('numero_serie', 'Número de série', 170),
@@ -2143,13 +2375,16 @@ def construir_interface(config, caminho_config):
                 tabela.delete(*itens_atuais)
             for indice, item in enumerate(lista_editada):
                 total_geral, tinta_preto = valores_contadores_cadastrados(item)
+                situacao = situacao_cadastrada(item)
                 tabela.insert(
                     '',
                     tk.END,
                     iid=str(indice),
+                    text=f" {rotulos_situacao[situacao]}",
+                    image=bolinhas[situacao],
                     values=(
-                        item['nome'],
                         item['setor'],
+                        item.get('supervisor') or '-',
                         item['host'],
                         item['ip'],
                         item.get('numero_serie') or '-',
@@ -2161,14 +2396,15 @@ def construir_interface(config, caminho_config):
 
         def editar_impressora(indice=None):
             registro = lista_editada[indice] if indice is not None else {
-                'nome': '', 'setor': '', 'host': '', 'ip': '',
+                'nome': '', 'setor': '', 'supervisor': '', 'host': '', 'ip': '',
                 'numero_serie': '', 'tipo_conexao': 'CABO',
                 'mac': '', 'total_geral_manual': '', 'tinta_preto_manual': '',
-                'total_geral_consultado': '-', 'tinta_preto_consultada': '-'
+                'total_geral_consultado': '-', 'tinta_preto_consultada': '-',
+                'situacao_consultada': '-'
             }
             formulario = tk.Toplevel(janela)
             formulario.title('Editar impressora' if indice is not None else 'Adicionar impressora')
-            formulario.geometry('500x490')
+            formulario.geometry('500x525')
             formulario.resizable(False, False)
             formulario.transient(janela)
             formulario.grab_set()
@@ -2176,6 +2412,7 @@ def construir_interface(config, caminho_config):
             campos = (
                 ('Identificação', 'nome'),
                 ('Setor físico', 'setor'),
+                ('Supervisor', 'supervisor'),
                 ('Hostname', 'host'),
                 ('IP IPv4', 'ip'),
                 ('Número de Série', 'numero_serie')
@@ -2298,6 +2535,11 @@ def construir_interface(config, caminho_config):
                 )
                 nova_impressora['tinta_preto_consultada'] = registro.get(
                     'tinta_preto_consultada', '-'
+                )
+                nova_impressora['situacao_consultada'] = (
+                    registro.get('situacao_consultada', '-')
+                    if nova_impressora.get('ip') == registro.get('ip')
+                    else '-'
                 )
                 try:
                     lista_validada = validar_lista_impressoras(nova_lista)
@@ -2553,7 +2795,7 @@ def construir_interface(config, caminho_config):
             marca_tempo = datetime.now().strftime('%Y%m%d_%H%M%S')
             caminho_html = salvar_relatorio(
                 html_relatorio,
-                pasta_relatorios / f'relatorio_impressoras_{marca_tempo}.html'
+                pasta_relatorios / NOME_ARQUIVO_RELATORIO_HTML
             )
             root.after(0, lambda: atualizar_progresso(95, 'Salvando o relatório CSV...'))
             caminho_csv = salvar_csv(

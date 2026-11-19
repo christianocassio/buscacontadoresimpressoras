@@ -7,6 +7,7 @@
         {
             "nome": "Impressora 01",
             "setor": "Setor 01",
+            "supervisor": "",
             "ip": "192.0.2.220",
             "host": "PRINTER-01",
             "numero_serie": "",
@@ -15,6 +16,7 @@
         {
             "nome": "Impressora 02",
             "setor": "Setor 02",
+            "supervisor": "",
             "ip": "192.0.2.221",
             "host": "PRINTER-02",
             "numero_serie": "",
@@ -23,6 +25,7 @@
         {
             "nome": "Impressora 03",
             "setor": "Setor 03",
+            "supervisor": "",
             "ip": "192.0.2.222",
             "host": "PRINTER-03",
             "numero_serie": "",
@@ -31,6 +34,7 @@
         {
             "nome": "Impressora 04",
             "setor": "Setor 04",
+            "supervisor": "",
             "ip": "192.0.2.223",
             "host": "PRINTER-04",
             "numero_serie": "",
@@ -39,6 +43,7 @@
         {
             "nome": "Impressora 05",
             "setor": "Setor 05",
+            "supervisor": "",
             "ip": "192.0.2.224",
             "host": "PRINTER-05",
             "numero_serie": "",
@@ -47,6 +52,7 @@
         {
             "nome": "Impressora 06",
             "setor": "Setor 06",
+            "supervisor": "",
             "ip": "192.0.2.225",
             "host": "PRINTER-06",
             "numero_serie": "",
@@ -55,6 +61,7 @@
         {
             "nome": "Impressora 07",
             "setor": "Setor 07",
+            "supervisor": "",
             "ip": "192.0.2.226",
             "host": "PRINTER-07",
             "numero_serie": "",
@@ -63,6 +70,7 @@
         {
             "nome": "Impressora 08",
             "setor": "Setor 08",
+            "supervisor": "",
             "ip": "192.0.2.227",
             "host": "PRINTER-08",
             "numero_serie": "",
@@ -71,6 +79,7 @@
         {
             "nome": "Impressora 09",
             "setor": "Setor 09",
+            "supervisor": "",
             "ip": "192.0.2.228",
             "host": "PRINTER-09",
             "numero_serie": "",

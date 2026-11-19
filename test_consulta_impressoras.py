@@ -394,15 +394,216 @@ Adaptador Ethernet Ethernet:
             app.valores_contadores_cadastrados(usb), ("5555", "45%")
         )
 
-    def test_painel_de_alertas_exibe_hostname_na_quinta_coluna(self):
+    def test_cadastro_guarda_situacao_da_ultima_consulta(self):
+        config = {"impressoras": [
+            {"nome": "Exp", "host": "H1", "ip": "10.0.0.1", "tipo_conexao": "CABO"},
+            {"nome": "RH", "host": "H2", "ip": "10.0.0.2", "tipo_conexao": "CABO"},
+            {"nome": "Pulmão", "host": "H3", "ip": "10.0.0.3", "tipo_conexao": "USB"},
+            {"nome": "Nova", "host": "H4", "ip": "10.0.0.4", "tipo_conexao": "CABO"},
+        ]}
+        alterou = app.atualizar_leituras_cadastradas(config, [
+            {"ip": "10.0.0.1", "status": "Sucesso", "tipo_conexao": "CABO"},
+            {"ip": "10.0.0.2", "status": "Falha de comunicação: timeout",
+             "tipo_conexao": "CABO"},
+        ])
+        self.assertTrue(alterou)
+        situacoes = [app.situacao_cadastrada(i) for i in config["impressoras"]]
+        self.assertEqual(situacoes, ["ONLINE", "OFF-LINE", "USB", "-"])
+
+        validada = app.validar_lista_impressoras(config["impressoras"])
+        self.assertEqual(validada[0]["situacao_consultada"], "ONLINE")
+        self.assertEqual(validada[1]["situacao_consultada"], "OFF-LINE")
+        self.assertEqual(validada[3]["situacao_consultada"], "-")
+        invalida = app.validar_lista_impressoras([
+            {**config["impressoras"][0], "situacao_consultada": "qualquer"}
+        ])
+        self.assertEqual(invalida[0]["situacao_consultada"], "-")
+
+    def test_config_de_exemplo_traz_campo_supervisor(self):
+        exemplo = app.json.loads(
+            app.caminho_recurso("config.example.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(all("supervisor" in i for i in exemplo["impressoras"]))
+
+    def test_painel_de_alertas_exibe_supervisor_antes_do_setor_e_hostname(self):
         valores = app.valores_linha_alerta_painel({
             "tipo": "Sem comunicação", "setor": "Expedição",
+            "supervisor": "Supervisor A",
             "nome": "Expedição", "ip": "10.0.0.1", "host": "IMP-EXP-01",
             "nome_dispositivo": "-", "numero_serie": "SN-123", "modelo": "WF-X",
             "mac": "-"
         })
 
-        self.assertEqual(valores[4], "IMP-EXP-01")
+        self.assertEqual(valores[1], "Supervisor A")
+        self.assertEqual(valores[2], "Expedição")
+        self.assertEqual(valores[4], "10.0.0.1")
+        self.assertEqual(valores[5], "IMP-EXP-01")
+
+    def test_cadastro_aceita_supervisor_opcional(self):
+        base = {"nome": "Expedição", "setor": "EXPEDIÇÃO", "host": "IMP-EXP-01"}
+        lista = app.validar_lista_impressoras([
+            {**base, "ip": "10.0.0.1", "supervisor": "  Supervisor A  "},
+            {**base, "ip": "10.0.0.2"},
+            {**base, "ip": "10.0.0.3", "supervisor": None},
+        ])
+        self.assertEqual(
+            [item["supervisor"] for item in lista],
+            ["Supervisor A", "", ""],
+        )
+        with self.assertRaises(ValueError):
+            app.validar_lista_impressoras([{**base, "ip": "10.0.0.4", "supervisor": 5}])
+
+    def test_situacao_de_conexao_online_offline_e_usb(self):
+        self.assertEqual(app.situacao_conexao({"status": "Sucesso"}), "ONLINE")
+        self.assertEqual(
+            app.situacao_conexao({"status": "Sucesso parcial - x"}), "ONLINE"
+        )
+        self.assertEqual(
+            app.situacao_conexao({"status": "Falha de comunicação: timeout"}),
+            "OFF-LINE",
+        )
+        self.assertEqual(app.situacao_conexao({"status": "Erro 500"}), "OFF-LINE")
+        self.assertEqual(
+            app.situacao_conexao({"status": "-", "tipo_conexao": "USB"}), "USB"
+        )
+
+    def test_dados_do_cadastro_atualizam_supervisor_dos_resultados(self):
+        resultados = [{"ip": "10.0.0.1", "setor": "Antigo", "supervisor": "-"}]
+        app.aplicar_dados_cadastro(resultados, [{
+            "ip": "10.0.0.1", "setor": "EXPEDIÇÃO", "supervisor": "Supervisor A"
+        }])
+        self.assertEqual(resultados[0]["supervisor"], "Supervisor A")
+        self.assertEqual(resultados[0]["setor"], "EXPEDIÇÃO")
+
+    def test_relatorio_tem_mapa_visual_entre_resumo_e_tabela(self):
+        online = {
+            "nome": "Exp", "setor": "EXPEDIÇÃO", "supervisor": "Supervisor A",
+            "host": "IMP-EXP-01", "ip": "10.0.0.1", "status": "Sucesso",
+            "tipo_conexao": "CABO", "modelo": "WF", "estado_impressora": "Pronta",
+            "mac": "-", "numero_serie": "-", "firmware": "-", "tinta_preto": "-",
+            "caixa_manutencao": "-", "nivel_papel": "-", "data_hora": "-",
+            "total_geral": "-", "total_pb": "-", "total_2faces": "-", "total_1face": "-",
+        }
+        offline = {
+            **online, "setor": "RH", "supervisor": "Supervisor B",
+            "host": "IMP-RH-01", "ip": "10.0.0.2",
+            "status": "Falha de comunicação: timeout", "estado_impressora": "-",
+        }
+        relatorio = app.gerar_html([online, offline], "19/11/2026")
+
+        self.assertIn("<h1>🖨️ Inventário de Impressoras CD05</h1>", relatorio)
+        self.assertIn("<p>Envio ao fornecedor de locação</p>", relatorio)
+        self.assertNotIn("Relatório Mensal de Impressoras", relatorio)
+        self.assertNotIn("Inventário técnico, insumos", relatorio)
+        self.assertLess(
+            relatorio.index("Resumo executivo"),
+            relatorio.index('<section class="mapa-impressoras"'),
+        )
+        self.assertLess(
+            relatorio.index('<section class="mapa-impressoras"'),
+            relatorio.index('<section class="tabela-final">'),
+        )
+        mapa = app.BeautifulSoup(relatorio, "html.parser").select_one(
+            "section.mapa-impressoras"
+        )
+        itens = mapa.select(".mapa-item")
+        self.assertEqual(len(itens), 2)
+        self.assertIn("mapa-online", itens[0]["class"])
+        self.assertIn("mapa-offline", itens[1]["class"])
+        texto_online = itens[0].get_text(" ", strip=True)
+        for valor in ("EXPEDIÇÃO", "IMP-EXP-01", "Supervisor A", "ONLINE"):
+            self.assertIn(valor, texto_online)
+        self.assertIn("OFF-LINE", itens[1].get_text(" ", strip=True))
+        self.assertIsNotNone(itens[0].select_one("svg.icone-impressora"))
+        self.assertIn("ONLINE: 1", mapa.get_text(" ", strip=True))
+        self.assertIn("OFF-LINE: 1", mapa.get_text(" ", strip=True))
+
+        tabela = app.BeautifulSoup(relatorio, "html.parser").select_one(
+            "table.dados-impressora"
+        )
+        cabecalho = [th.get_text(strip=True) for th in tabela.select("thead th")]
+        self.assertEqual(
+            cabecalho[:4],
+            ["Estado da impressora", "Supervisor", "Setor físico", "Hostname"],
+        )
+        self.assertEqual(cabecalho.count("Estado da impressora"), 1)
+        primeira, segunda = tabela.select("tbody tr")
+        celula_online = primeira.select("td")[0]
+        self.assertIsNotNone(celula_online.select_one(".indicador-situacao"))
+        self.assertIn("#22c55e", str(celula_online))
+        self.assertIn("ONLINE", celula_online.get_text(" ", strip=True))
+        self.assertIn("Pronta", celula_online.get_text(" ", strip=True))
+        celula_offline = segunda.select("td")[0]
+        self.assertIn("#ef4444", str(celula_offline))
+        self.assertIn("OFF-LINE", celula_offline.get_text(" ", strip=True))
+        self.assertEqual(primeira.select("td")[1].get_text(strip=True), "Supervisor A")
+
+        self.assertIn("<span>SUPERVISOR</span>", relatorio)
+        self.assertIn("<strong>Supervisor:</strong> Supervisor B", relatorio)
+
+
+    def test_tabela_fixa_as_quatro_primeiras_colunas(self):
+        item = {
+            "setor": "CPD", "supervisor": "S", "host": "H", "ip": "10.0.0.9",
+            "status": "Sucesso", "tipo_conexao": "CABO",
+        }
+        tabela = app.BeautifulSoup(
+            app.gerar_tabela_completa([item]), "html.parser"
+        ).select_one("table.dados-impressora")
+        for linha in (tabela.select_one("thead tr"), tabela.select_one("tbody tr")):
+            celulas = linha.find_all(["th", "td"])
+            esquerdas = [
+                c["style"].split("left:")[1].split("px")[0]
+                for c in celulas[:4]
+            ]
+            posicoes = app.posicoes_colunas_fixas([item])
+            esperado = [str(posicoes[c][0]) for c in app.COLUNAS_FIXAS_TABELA]
+            self.assertEqual(esquerdas, esperado)
+            for celula in celulas[:4]:
+                self.assertIn("position:sticky", celula["style"])
+                self.assertIn("coluna-fixa", celula.get("class", []))
+            self.assertNotIn("position:sticky", celulas[4]["style"])
+        self.assertIn("border-collapse:separate", tabela["style"])
+        self.assertIn("width:max-content", tabela["style"])
+        self.assertNotIn("min-width:2400px", tabela["style"])
+
+    def test_colunas_fixas_ajustam_ao_maior_texto(self):
+        curto = {"setor": "RH", "supervisor": "A", "host": "H", "ip": "1.1.1.1",
+                 "status": "Sucesso", "tipo_conexao": "CABO", "estado_impressora": "-"}
+        longo = {**curto, "setor": "ENT. DE NOTAS 2 - DOCA SUL"}
+        p_curto = app.posicoes_colunas_fixas([curto])
+        p_longo = app.posicoes_colunas_fixas([curto, longo])
+        self.assertGreater(p_longo["setor"][1], p_curto["setor"][1])
+        esquerda = 0
+        for chave in app.COLUNAS_FIXAS_TABELA:
+            self.assertEqual(p_longo[chave][0], esquerda)
+            esquerda += p_longo[chave][1]
+
+    def test_nome_fixo_do_relatorio_html(self):
+        self.assertEqual(app.NOME_ARQUIVO_RELATORIO_HTML, "Clique Aqui Contadores.html")
+
+    def test_mapa_mostra_nivel_de_tinta_e_paginas(self):
+        base = {
+            "setor": "CPD", "supervisor": "S", "host": "H", "ip": "10.0.0.9",
+            "status": "Sucesso", "tipo_conexao": "CABO",
+        }
+        mapa = app.gerar_mapa_impressoras(
+            [
+                {**base, "tinta_preto": "75%", "total_geral": "12345"},
+                {**base, "tinta_preto": "10%", "total_geral": "500"},
+                {**base, "tinta_preto": "-", "total_geral": "-"},
+            ],
+            limite_tinta=20,
+        )
+        itens = app.BeautifulSoup(mapa, "html.parser").select(".mapa-item")
+        texto = itens[0].get_text(" ", strip=True)
+        for valor in ("Tinta preta", "75%", "Páginas", "12345"):
+            self.assertIn(valor, texto)
+        barra = itens[0].select_one(".mapa-barra div")["style"]
+        self.assertIn("width:75%", barra)
+        self.assertIn("#22c55e", barra)
+        self.assertIn("#ef4444", itens[1].select_one(".mapa-barra div")["style"])
+        self.assertIn("width:0%", itens[2].select_one(".mapa-barra div")["style"])
 
     def test_configuracao_preserva_contatos_configurados_e_remove_limite_de_papel(self):
         with tempfile.TemporaryDirectory() as pasta_temporaria:
@@ -613,10 +814,16 @@ Adaptador Ethernet Ethernet:
         self.assertEqual(resultados[0]["status"], "Sucesso")
         self.assertEqual(
             [resultados[0][chave] for chave in (
-                "total_geral", "total_pb", "total_cor", "total_2faces", "total_1face"
+                "total_geral", "total_pb", "total_2faces", "total_1face"
             )],
-            ["11407", "11407", "0", "3", "11404"],
+            ["11407", "11407", "3", "11404"],
         )
+        for removido in (
+            "total_cor", "estado_digitalizador", "leitor_cartao", "epson_connect",
+            "nivel_papel_bandeja1", "tamanho_papel", "tipo_papel",
+        ):
+            self.assertNotIn(removido, resultados[0])
+            self.assertNotIn(removido, resultados[1])
         self.assertEqual(resultados[0]["tinta_preto"], "-")
         self.assertTrue(resultados[1]["status"].startswith("Falha de comunicação"))
         self.assertEqual(resultados[1]["setor"], "Setor 02")
@@ -670,7 +877,8 @@ Adaptador Ethernet Ethernet:
         self.assertIn("Hostname: PRINTER-01", mensagem)
         self.assertIn("Número de série: SNTEST12345", mensagem)
         self.assertNotIn("*⚠️ IMPRESSORAS COM TINTA VAZIA OU BAIXA*", mensagem)
-        self.assertIn("Identificação: Impressora 1 | Modelo: WF-M5899 Series", mensagem)
+        self.assertNotIn("Identificação", mensagem)
+        self.assertNotIn("Cor:", mensagem)
         self.assertIn(
             "Setor físico: Setor A",
             mensagem,
@@ -683,7 +891,7 @@ Adaptador Ethernet Ethernet:
         )
         self.assertIn("Tinta preta: 15%", mensagem)
         self.assertIn(
-            "Contadores — Total: 11407 | P&B: 11407 | Cor: 0 | 2 faces: 3 | 1 face: 11404",
+            "Contadores — Total: 11407 | P&B: 11407 | 2 faces: 3 | 1 face: 11404",
             mensagem,
         )
         self.assertNotIn("Setor físico | Hostname | IP", mensagem)
@@ -701,7 +909,11 @@ Adaptador Ethernet Ethernet:
         }
         cabo = {
             chave: "-"
-            for chave, _rotulo in app.COLUNAS_TABELA_COMPLETA
+            for chave in (
+                *(chave for chave, _rotulo in app.COLUNAS_TABELA_COMPLETA),
+                "estado_digitalizador", "leitor_cartao", "epson_connect",
+                "nivel_papel_bandeja1", "tamanho_papel", "tipo_papel",
+            )
         }
         cabo.update({
             "nome": "Impressora de rede", "setor": "TI", "host": "IMP-CABO",
@@ -810,17 +1022,16 @@ Adaptador Ethernet Ethernet:
 
         for rotulo in (
             "Setor físico", "Hostname", "IP", "Número total de páginas",
-            "P&amp;B", "Cor", "Impressão em 2 faces", "Impressão em 1 face",
+            "P&amp;B", "Impressão em 2 faces", "Impressão em 1 face",
             "Número de série", "Modelo", "MAC",
-            "Firmware", "Status", "Estado da impressora", "Estado do digitalizador",
-            "Leitor de cartão", "Epson Connect", "Tinta preta", "Caixa de manutenção",
-            "Nível de papel geral", "Bandeja 1", "Tamanho do papel", "Tipo de papel",
-            "Data/hora da impressora"
+            "Firmware", "Status", "Estado da impressora",
+            "Tinta preta", "Caixa de manutenção",
+            "Nível de papel geral", "Data/hora da impressora"
         ):
             self.assertIn(rotulo, corpo)
         self.assertIn('<th scope="col"', corpo)
         self.assertLess(corpo.index("Setor físico"), corpo.index("Hostname"))
-        self.assertLess(corpo.index("Hostname"), corpo.index(">Identificação<"))
+        self.assertLess(corpo.index("Hostname"), corpo.index(">Modelo<"))
         self.assertLess(corpo.index(">MAC<"), corpo.index(">IP<"))
         self.assertLess(corpo.index(">IP<"), corpo.index(">Número de série<"))
         self.assertLess(
@@ -836,10 +1047,11 @@ Adaptador Ethernet Ethernet:
             corpo.index(">Número total de páginas<"),
         )
         self.assertEqual(corpo.count(">Tinta preta<"), 1)
-        self.assertIn(">Identificação<", corpo)
+        self.assertNotIn(">Identificação<", corpo)
+        self.assertNotIn(">Cor<", corpo)
         self.assertEqual(corpo.count('<tr class="linha-impressora">'), 1)
         self.assertIn('overflow-x:auto', corpo)
-        self.assertIn('min-width:2400px', corpo)
+        self.assertIn('width:max-content', corpo)
         self.assertIn('class="contador-paginas"', corpo)
         self.assertIn("background:#fff1b8", corpo)
         self.assertIn("Tecnologia &lt;teste&gt;", corpo)
@@ -972,11 +1184,13 @@ Adaptador Ethernet Ethernet:
         self.assertEqual(linha["Hostname"], "PRINTER-01")
         self.assertEqual(linha["Número de série"], "SNTEST12345")
         self.assertEqual(linha["Total geral"], "11407")
-        self.assertEqual(colunas[:8], [
-            "Setor físico", "Hostname", "IP", "Identificação",
-            "Número de série", "Modelo", "MAC", "Firmware"
+        self.assertEqual(colunas, [
+            "Supervisor", "Setor físico", "Hostname", "IP",
+            "Número de série", "Modelo", "MAC", "Firmware",
+            "Total geral", "Total P&B", "Total 2 faces", "Total 1 face",
+            "Status", "Estado da impressora", "Tinta preta",
+            "Caixa de manutenção", "Nível de papel", "Data/hora da impressora"
         ])
-        self.assertEqual(colunas[8], "Total geral")
 
     def test_relatorio_destaca_setor_e_ip(self):
         item = {
@@ -1024,7 +1238,7 @@ Adaptador Ethernet Ethernet:
         self.assertIn("localizacao-setor", relatorio)
         self.assertIn("localizacao-ip", relatorio)
         self.assertIn(
-            "<title>Relatório Mensal de Impressoras</title>", relatorio
+            "<title>Inventário de Impressoras CD05</title>", relatorio
         )
         self.assertIn('<section class="tabela-final">', relatorio)
         self.assertIn("<h2>Relatório por Setor x Dispositivos</h2>", relatorio)
@@ -1059,11 +1273,24 @@ Adaptador Ethernet Ethernet:
         cabecalho = relatorio[inicio_cabecalho:fim_cabecalho]
         colunas_na_ordem = (
             '>MAC<', '>IP<', '>Número de série<',
-            '>Tinta preta<', '>Número total de páginas<', '>P&amp;B<', '>Cor<',
+            '>Tinta preta<', '>Número total de páginas<', '>P&amp;B<',
             '>Impressão em 2 faces<', '>Impressão em 1 face<',
         )
         posicoes_colunas = [cabecalho.index(rotulo) for rotulo in colunas_na_ordem]
         self.assertEqual(posicoes_colunas, sorted(posicoes_colunas))
+        for rotulo_removido in (
+            "Identificação", ">Cor<", "Digitalizador", "digitalizador",
+            "Leitor de cartão", "Epson Connect", "Bandeja 1",
+            "Tamanho do papel", "Tipo de papel", "Tamanho / Tipo",
+        ):
+            self.assertNotIn(rotulo_removido, relatorio)
+        for removida in (
+            '>Identificação<', '>Cor<', '>Estado do digitalizador<',
+            '>Leitor de cartão<', '>Epson Connect<', '>Bandeja 1<',
+            '>Tamanho do papel<', '>Tipo de papel<',
+        ):
+            self.assertNotIn(removida, cabecalho)
+        self.assertEqual(cabecalho.count('<th scope="col"'), 19)
         self.assertEqual(relatorio.count('<tr class="linha-impressora">'), 1)
         self.assertIn('overflow-x:auto', relatorio)
         self.assertIn('html { zoom: 75%; }', relatorio)
