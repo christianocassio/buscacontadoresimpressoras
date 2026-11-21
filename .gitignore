@@ -8,3 +8,6 @@ TMP/
 *.eml
 relatorios/
 config.json
+
+# Mapa dos APs da unidade (planta interna, não publicar)
+mapa_aps.html

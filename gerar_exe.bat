@@ -10,11 +10,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+set "MAPA_APS="
+if exist mapa_aps.html set "MAPA_APS=--add-data mapa_aps.html;."
+
 echo Gerando ConsultaImpressoras.exe...
 py -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name ConsultaImpressoras ^
     --icon app.ico ^
     --add-data "config.example.json;." ^
+    %MAPA_APS% ^
     consulta_impressoras.py
 if errorlevel 1 (
     echo Falha ao gerar o executavel.

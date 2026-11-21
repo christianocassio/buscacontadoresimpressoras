@@ -17,7 +17,6 @@ from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
 import tkinter as tk
-from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import ttk
 
@@ -51,11 +50,10 @@ CONFIG_PADRAO = {
     "limite_tinta": 20,
     "faixa_rede_corporativa": "192.0.2.0/24",
     "mapa_aps_titulo": "Mapa dos APs CD05 Contagem-MG PagMenos",
-    "mapa_aps_arquivo": "",
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.19"
+APP_VERSION = "1.0.20"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -136,10 +134,11 @@ def carregar_config():
         raise ValueError(f"O arquivo de configuração deve conter um objeto JSON: {caminho}")
 
     config = {**CONFIG_PADRAO, **config_carregada}
-    for chave in ("email_padrao", "whatsapp_padrao", "mapa_aps_titulo", "mapa_aps_arquivo"):
+    for chave in ("email_padrao", "whatsapp_padrao", "mapa_aps_titulo"):
         if not isinstance(config[chave], str):
             raise ValueError(f"O valor de '{chave}' deve ser texto.")
     config.pop("limite_papel", None)
+    config.pop("mapa_aps_arquivo", None)
     config["impressoras"] = validar_lista_impressoras(config["impressoras"])
     valor_limite_tinta = config["limite_tinta"]
     if (
@@ -171,33 +170,35 @@ def salvar_config(config, caminho):
     )
 
 
-ARQUIVOS_APOIO_MAPA_APS = ("mapa.jpg", "1000369102_2.png")
+NOME_ARQUIVO_MAPA_APS = "mapa_aps.html"
 
 
-def instalar_mapa_aps(origem, pasta_destino=None):
-    """Copia o HTML do mapa (e a foto aérea ao lado dele, se houver) para a pasta do app."""
-    origem = Path(origem)
+def instalar_mapa_aps(origem=None, pasta_destino=None):
+    """Copia o mapa dos APs embutido no programa para a pasta do app.
+
+    O exe é temporário (PyInstaller), então o mapa precisa de um endereço fixo
+    para o botão do app e o link do relatório. Retorna None se o mapa não veio
+    junto nesta compilação.
+    """
+    origem = Path(origem or caminho_recurso(NOME_ARQUIVO_MAPA_APS))
     if not origem.is_file():
-        raise ValueError(f"Arquivo do mapa não encontrado: {origem}")
+        return None
     pasta_destino = Path(pasta_destino or PASTA_DADOS / "mapa_aps")
     pasta_destino.mkdir(parents=True, exist_ok=True)
-    destino = pasta_destino / "mapa_aps.html"
-    if origem.resolve() != destino.resolve():
-        shutil.copyfile(origem, destino)
-    for nome in ARQUIVOS_APOIO_MAPA_APS:
-        apoio = origem.parent / nome
-        if apoio.is_file() and apoio.resolve() != (pasta_destino / nome).resolve():
-            shutil.copyfile(apoio, pasta_destino / nome)
+    destino = pasta_destino / NOME_ARQUIVO_MAPA_APS
+    conteudo = origem.read_bytes()
+    if not destino.is_file() or destino.read_bytes() != conteudo:
+        destino.write_bytes(conteudo)
     return destino
 
 
-def dados_mapa_aps(config):
-    """Retorna (título, endereço file://) do mapa dos APs, ou None se não estiver configurado."""
-    caminho = str(config.get("mapa_aps_arquivo") or "").strip()
-    if not caminho or not Path(caminho).is_file():
+def dados_mapa_aps(config, caminho_mapa=None):
+    """Retorna (título, endereço file://) do mapa dos APs, ou None se não houver mapa."""
+    caminho = Path(caminho_mapa or PASTA_DADOS / "mapa_aps" / NOME_ARQUIVO_MAPA_APS)
+    if not caminho.is_file():
         return None
     titulo = str(config.get("mapa_aps_titulo") or "").strip() or "Mapa dos APs"
-    return titulo, Path(caminho).resolve().as_uri()
+    return titulo, caminho.resolve().as_uri()
 
 
 def validar_lista_impressoras(lista):
@@ -2077,41 +2078,21 @@ def construir_interface(config, caminho_config):
         pady=3
     ).grid(row=0, column=2, sticky='e')
 
-    def escolher_mapa_aps():
-        escolhido = filedialog.askopenfilename(
-            parent=root,
-            title=f"Selecione o arquivo HTML do {config['mapa_aps_titulo']}",
-            filetypes=[('Página HTML', '*.html *.htm'), ('Todos os arquivos', '*.*')]
-        )
-        if not escolhido:
-            return None
-        try:
-            destino = instalar_mapa_aps(escolhido)
-            config['mapa_aps_arquivo'] = str(destino)
-            salvar_config(config, caminho_config)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror('Não foi possível instalar o mapa', str(exc), parent=root)
-            return None
-        if dados['resultados'] is not None:
-            try:
-                dados['html'], dados['csv'] = atualizar_relatorios_salvos(
-                    dados['resultados'], dados['data'], dados['html'], dados['csv'],
-                    config['limite_tinta'],
-                    impressoras_usb=config['impressoras'],
-                    mapa_aps=dados_mapa_aps(config)
-                )
-            except (OSError, RuntimeError, ValueError):
-                pass  # o botão entra no relatório na próxima consulta
-        return destino
+    try:
+        caminho_mapa_aps = instalar_mapa_aps()
+    except OSError:
+        caminho_mapa_aps = None
 
-    def abrir_mapa_aps(trocar=False):
-        caminho = config.get('mapa_aps_arquivo') or ''
-        if trocar or not caminho or not Path(caminho).is_file():
-            caminho = escolher_mapa_aps()
-            if not caminho:
-                return
+    def abrir_mapa_aps():
+        if caminho_mapa_aps is None or not caminho_mapa_aps.is_file():
+            messagebox.showwarning(
+                'Mapa não disponível',
+                'O mapa dos APs não está incluído nesta versão do programa.',
+                parent=root
+            )
+            return
         try:
-            abrir_relatorio_navegador(caminho)
+            abrir_relatorio_navegador(caminho_mapa_aps)
         except RuntimeError as exc:
             messagebox.showerror('Não foi possível abrir o mapa', str(exc), parent=root)
 
@@ -2131,19 +2112,6 @@ def construir_interface(config, caminho_config):
         pady=4,
         cursor='hand2'
     ).pack(side='left')
-    tk.Button(
-        barra_mapa,
-        text='Trocar mapa',
-        command=lambda: abrir_mapa_aps(trocar=True),
-        bg='#e2e8f0',
-        fg='#0f172a',
-        activebackground='#cbd5e1',
-        font=('Arial', 8),
-        relief='flat',
-        padx=6,
-        pady=4,
-        cursor='hand2'
-    ).pack(side='left', padx=(4, 0))
     tk.Label(
         frame,
         text='A consulta inicia ao abrir o programa. O relatório será aberto no navegador ao terminar.',

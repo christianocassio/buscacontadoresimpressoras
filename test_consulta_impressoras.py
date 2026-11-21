@@ -585,17 +585,19 @@ Adaptador Ethernet Ethernet:
     def test_mapa_aps_instalado_e_botao_no_relatorio(self):
         import tempfile
         with tempfile.TemporaryDirectory() as pasta:
-            origem = Path(pasta) / "baixados" / "Planta CD (5).html"
+            origem = Path(pasta) / "embutido" / "mapa_aps.html"
             origem.parent.mkdir()
             origem.write_text("<html>mapa</html>", encoding="utf-8")
-            (origem.parent / "mapa.jpg").write_bytes(b"jpg")
             destino = app.instalar_mapa_aps(origem, Path(pasta) / "app")
             self.assertEqual(destino.name, "mapa_aps.html")
             self.assertEqual(destino.read_text(encoding="utf-8"), "<html>mapa</html>")
-            self.assertTrue((destino.parent / "mapa.jpg").is_file())
+            origem.write_text("<html>mapa novo</html>", encoding="utf-8")
+            app.instalar_mapa_aps(origem, Path(pasta) / "app")
+            self.assertEqual(destino.read_text(encoding="utf-8"), "<html>mapa novo</html>")
+            self.assertIsNone(app.instalar_mapa_aps(Path(pasta) / "nao.html", Path(pasta) / "app"))
 
-            config = {"mapa_aps_titulo": "Mapa dos APs CD05", "mapa_aps_arquivo": str(destino)}
-            titulo, endereco = app.dados_mapa_aps(config)
+            config = {"mapa_aps_titulo": "Mapa dos APs CD05"}
+            titulo, endereco = app.dados_mapa_aps(config, destino)
             self.assertEqual(titulo, "Mapa dos APs CD05")
             self.assertTrue(endereco.startswith("file:///"))
 
@@ -615,8 +617,7 @@ Adaptador Ethernet Ethernet:
             self.assertIn("Mapa dos APs CD05", botao.get_text())
 
             self.assertNotIn('class="botao-mapa"', app.gerar_html([item], "21/11/2026"))
-            self.assertIsNone(app.dados_mapa_aps({"mapa_aps_arquivo": ""}))
-            self.assertIsNone(app.dados_mapa_aps({"mapa_aps_arquivo": str(Path(pasta) / "nao.html")}))
+            self.assertIsNone(app.dados_mapa_aps(config, Path(pasta) / "nao.html"))
 
     def test_mapa_mostra_nivel_de_tinta_e_paginas(self):
         base = {
