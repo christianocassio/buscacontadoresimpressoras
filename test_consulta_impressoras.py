@@ -582,6 +582,42 @@ Adaptador Ethernet Ethernet:
     def test_nome_fixo_do_relatorio_html(self):
         self.assertEqual(app.NOME_ARQUIVO_RELATORIO_HTML, "Clique Aqui Contadores.html")
 
+    def test_mapa_aps_instalado_e_botao_no_relatorio(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as pasta:
+            origem = Path(pasta) / "baixados" / "Planta CD (5).html"
+            origem.parent.mkdir()
+            origem.write_text("<html>mapa</html>", encoding="utf-8")
+            (origem.parent / "mapa.jpg").write_bytes(b"jpg")
+            destino = app.instalar_mapa_aps(origem, Path(pasta) / "app")
+            self.assertEqual(destino.name, "mapa_aps.html")
+            self.assertEqual(destino.read_text(encoding="utf-8"), "<html>mapa</html>")
+            self.assertTrue((destino.parent / "mapa.jpg").is_file())
+
+            config = {"mapa_aps_titulo": "Mapa dos APs CD05", "mapa_aps_arquivo": str(destino)}
+            titulo, endereco = app.dados_mapa_aps(config)
+            self.assertEqual(titulo, "Mapa dos APs CD05")
+            self.assertTrue(endereco.startswith("file:///"))
+
+            item = {
+                "nome": "CPD", "setor": "CPD", "supervisor": "S", "host": "H",
+                "ip": "10.0.0.9", "status": "Sucesso", "tipo_conexao": "CABO",
+                "modelo": "WF", "estado_impressora": "-", "mac": "-",
+                "numero_serie": "-", "firmware": "-", "tinta_preto": "-",
+                "caixa_manutencao": "-", "nivel_papel": "-", "data_hora": "-",
+                "total_geral": "-", "total_pb": "-", "total_2faces": "-",
+                "total_1face": "-",
+            }
+            relatorio = app.gerar_html([item], "21/11/2026", mapa_aps=(titulo, endereco))
+            botao = app.BeautifulSoup(relatorio, "html.parser").select_one(".info-bar a.botao-mapa")
+            self.assertIsNotNone(botao)
+            self.assertEqual(botao["href"], endereco)
+            self.assertIn("Mapa dos APs CD05", botao.get_text())
+
+            self.assertNotIn('class="botao-mapa"', app.gerar_html([item], "21/11/2026"))
+            self.assertIsNone(app.dados_mapa_aps({"mapa_aps_arquivo": ""}))
+            self.assertIsNone(app.dados_mapa_aps({"mapa_aps_arquivo": str(Path(pasta) / "nao.html")}))
+
     def test_mapa_mostra_nivel_de_tinta_e_paginas(self):
         base = {
             "setor": "CPD", "supervisor": "S", "host": "H", "ip": "10.0.0.9",

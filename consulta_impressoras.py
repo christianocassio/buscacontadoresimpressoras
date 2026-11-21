@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+import shutil
 import csv
 import html
 import ipaddress
@@ -16,6 +17,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
 import tkinter as tk
+from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import ttk
 
@@ -48,10 +50,12 @@ CONFIG_PADRAO = {
     "whatsapp_padrao": WHATSAPP_PADRAO,
     "limite_tinta": 20,
     "faixa_rede_corporativa": "192.0.2.0/24",
+    "mapa_aps_titulo": "Mapa dos APs CD05 Contagem-MG PagMenos",
+    "mapa_aps_arquivo": "",
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.18"
+APP_VERSION = "1.0.19"
 APP_DEVELOPER = "Christiano Miranda"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
@@ -132,7 +136,7 @@ def carregar_config():
         raise ValueError(f"O arquivo de configuração deve conter um objeto JSON: {caminho}")
 
     config = {**CONFIG_PADRAO, **config_carregada}
-    for chave in ("email_padrao", "whatsapp_padrao"):
+    for chave in ("email_padrao", "whatsapp_padrao", "mapa_aps_titulo", "mapa_aps_arquivo"):
         if not isinstance(config[chave], str):
             raise ValueError(f"O valor de '{chave}' deve ser texto.")
     config.pop("limite_papel", None)
@@ -165,6 +169,35 @@ def salvar_config(config, caminho):
         json.dumps(config, ensure_ascii=False, indent=4),
         encoding="utf-8"
     )
+
+
+ARQUIVOS_APOIO_MAPA_APS = ("mapa.jpg", "1000369102_2.png")
+
+
+def instalar_mapa_aps(origem, pasta_destino=None):
+    """Copia o HTML do mapa (e a foto aérea ao lado dele, se houver) para a pasta do app."""
+    origem = Path(origem)
+    if not origem.is_file():
+        raise ValueError(f"Arquivo do mapa não encontrado: {origem}")
+    pasta_destino = Path(pasta_destino or PASTA_DADOS / "mapa_aps")
+    pasta_destino.mkdir(parents=True, exist_ok=True)
+    destino = pasta_destino / "mapa_aps.html"
+    if origem.resolve() != destino.resolve():
+        shutil.copyfile(origem, destino)
+    for nome in ARQUIVOS_APOIO_MAPA_APS:
+        apoio = origem.parent / nome
+        if apoio.is_file() and apoio.resolve() != (pasta_destino / nome).resolve():
+            shutil.copyfile(apoio, pasta_destino / nome)
+    return destino
+
+
+def dados_mapa_aps(config):
+    """Retorna (título, endereço file://) do mapa dos APs, ou None se não estiver configurado."""
+    caminho = str(config.get("mapa_aps_arquivo") or "").strip()
+    if not caminho or not Path(caminho).is_file():
+        return None
+    titulo = str(config.get("mapa_aps_titulo") or "").strip() or "Mapa dos APs"
+    return titulo, Path(caminho).resolve().as_uri()
 
 
 def validar_lista_impressoras(lista):
@@ -1191,6 +1224,16 @@ def gerar_tabela_completa(resultados, limite_tinta=20):
 
 NOME_ARQUIVO_RELATORIO_HTML = "Clique Aqui Contadores.html"
 TITULO_RELATORIO = "Inventário de Impressoras CD05"
+
+
+def botao_mapa_aps_html(mapa_aps):
+    if not mapa_aps:
+        return ''
+    titulo, endereco = mapa_aps
+    return (
+        f'<a class="botao-mapa" href="{escapar_html(endereco)}" target="_blank" '
+        f'rel="noopener noreferrer">🗺️ {escapar_html(titulo)}</a>'
+    )
 SUBTITULO_RELATORIO = "Envio ao fornecedor de locação"
 
 
@@ -1272,7 +1315,7 @@ def gerar_mapa_impressoras(itens, limite_tinta=20):
 
 
 def gerar_html(
-    resultados, data_consulta, limite_tinta=20, impressoras_usb=None
+    resultados, data_consulta, limite_tinta=20, impressoras_usb=None, mapa_aps=None
 ):
     alertas = gerar_alertas(resultados, limite_tinta)
     ips_resultados = {limpar_texto(item.get('ip')) for item in resultados}
@@ -1301,6 +1344,9 @@ def gerar_html(
         .cabecalho {{ background: linear-gradient(135deg, #0f4c81, #1a73c5); color: white; padding: 28px 24px; border-radius: 12px; text-align: center; margin-bottom: 18px; }}
         .cabecalho h1 {{ margin: 0 0 6px; font-size: 30px; }}
         .cabecalho p {{ margin: 0; opacity: 0.9; }}
+        .info-topo {{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }}
+        .botao-mapa {{ display: inline-block; background: linear-gradient(135deg, #0284c7, #06b6d4); color: #fff; text-decoration: none; font-weight: 700; font-size: 14px; padding: 9px 16px; border-radius: 8px; box-shadow: 0 3px 10px rgba(6,182,212,.35); }}
+        .botao-mapa:hover {{ filter: brightness(1.08); }}
         .info-bar {{ background: white; border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }}
         .resumo {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 18px 0 0; }}
         .chip {{ background: #f1f5f9; border: 1px solid #dfe7f1; border-radius: 8px; padding: 12px 14px; }}
@@ -1384,7 +1430,10 @@ def gerar_html(
         </div>
 
         <div class=\"info-bar\">
-            <strong>📅 Data da consulta:</strong> {escapar_html(data_consulta)}
+            <div class=\"info-topo\">
+                <div><strong>📅 Data da consulta:</strong> {escapar_html(data_consulta)}</div>
+                {botao_mapa_aps_html(mapa_aps)}
+            </div>
             <h2 class=\"resumo-titulo\">Resumo executivo</h2>
             <div class=\"resumo\">
                 <div class=\"chip\"><strong>Total de equipamentos</strong><span>{len(resultados) + len(linhas_usb)}</span></div>
@@ -1612,7 +1661,7 @@ def separar_whatsapp_numeros(numeros):
 
 def atualizar_relatorios_salvos(
     resultados, data_consulta, caminho_html, caminho_csv,
-    limite_tinta=20, impressoras_usb=None
+    limite_tinta=20, impressoras_usb=None, mapa_aps=None
 ):
     if resultados is None or caminho_html is None or caminho_csv is None:
         raise ValueError("Não há consulta concluída para atualizar os relatórios.")
@@ -1621,7 +1670,8 @@ def atualizar_relatorios_salvos(
         resultados,
         data_consulta,
         limite_tinta,
-        impressoras_usb=impressoras_usb
+        impressoras_usb=impressoras_usb,
+        mapa_aps=mapa_aps
     )
     caminho_html = salvar_relatorio(html_relatorio, caminho_html)
     caminho_csv = salvar_csv(resultados, caminho_csv, impressoras_usb)
@@ -2026,6 +2076,74 @@ def construir_interface(config, caminho_config):
         padx=8,
         pady=3
     ).grid(row=0, column=2, sticky='e')
+
+    def escolher_mapa_aps():
+        escolhido = filedialog.askopenfilename(
+            parent=root,
+            title=f"Selecione o arquivo HTML do {config['mapa_aps_titulo']}",
+            filetypes=[('Página HTML', '*.html *.htm'), ('Todos os arquivos', '*.*')]
+        )
+        if not escolhido:
+            return None
+        try:
+            destino = instalar_mapa_aps(escolhido)
+            config['mapa_aps_arquivo'] = str(destino)
+            salvar_config(config, caminho_config)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror('Não foi possível instalar o mapa', str(exc), parent=root)
+            return None
+        if dados['resultados'] is not None:
+            try:
+                dados['html'], dados['csv'] = atualizar_relatorios_salvos(
+                    dados['resultados'], dados['data'], dados['html'], dados['csv'],
+                    config['limite_tinta'],
+                    impressoras_usb=config['impressoras'],
+                    mapa_aps=dados_mapa_aps(config)
+                )
+            except (OSError, RuntimeError, ValueError):
+                pass  # o botão entra no relatório na próxima consulta
+        return destino
+
+    def abrir_mapa_aps(trocar=False):
+        caminho = config.get('mapa_aps_arquivo') or ''
+        if trocar or not caminho or not Path(caminho).is_file():
+            caminho = escolher_mapa_aps()
+            if not caminho:
+                return
+        try:
+            abrir_relatorio_navegador(caminho)
+        except RuntimeError as exc:
+            messagebox.showerror('Não foi possível abrir o mapa', str(exc), parent=root)
+
+    barra_mapa = tk.Frame(cabecalho, bg='white')
+    barra_mapa.grid(row=1, column=1, columnspan=2, sticky='e', pady=(4, 0))
+    tk.Button(
+        barra_mapa,
+        text=config['mapa_aps_titulo'],
+        command=abrir_mapa_aps,
+        bg='#0891b2',
+        fg='white',
+        activebackground='#0e7490',
+        activeforeground='white',
+        font=('Arial', 9, 'bold'),
+        relief='flat',
+        padx=10,
+        pady=4,
+        cursor='hand2'
+    ).pack(side='left')
+    tk.Button(
+        barra_mapa,
+        text='Trocar mapa',
+        command=lambda: abrir_mapa_aps(trocar=True),
+        bg='#e2e8f0',
+        fg='#0f172a',
+        activebackground='#cbd5e1',
+        font=('Arial', 8),
+        relief='flat',
+        padx=6,
+        pady=4,
+        cursor='hand2'
+    ).pack(side='left', padx=(4, 0))
     tk.Label(
         frame,
         text='A consulta inicia ao abrir o programa. O relatório será aberto no navegador ao terminar.',
@@ -2601,7 +2719,8 @@ def construir_interface(config, caminho_config):
                         dados['html'],
                         dados['csv'],
                         config['limite_tinta'],
-                        impressoras_usb=config['impressoras']
+                        impressoras_usb=config['impressoras'],
+                        mapa_aps=dados_mapa_aps(config)
                     )
                 except (OSError, RuntimeError, ValueError) as exc:
                     messagebox.showerror(
@@ -2789,7 +2908,8 @@ def construir_interface(config, caminho_config):
                 resultados,
                 data_consulta,
                 config['limite_tinta'],
-                impressoras_usb=config['impressoras']
+                impressoras_usb=config['impressoras'],
+                mapa_aps=dados_mapa_aps(config)
             )
             root.after(0, lambda: atualizar_progresso(90, 'Salvando o relatório HTML...'))
             marca_tempo = datetime.now().strftime('%Y%m%d_%H%M%S')
