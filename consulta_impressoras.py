@@ -53,8 +53,9 @@ CONFIG_PADRAO = {
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.20"
+APP_VERSION = "1.0.21"
 APP_DEVELOPER = "Christiano Miranda"
+NOME_PLATAFORMA = "Gerenciamento TI"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
 FAIXA_REDE_EXEMPLO = "192.0.2.0/24"
@@ -2002,7 +2003,7 @@ def consultar_impressoras(progress_callback=None, lista_impressoras=None):
 
 def construir_interface(config, caminho_config):
     root = tk.Tk()
-    root.title('Monitoramento de Impressoras')
+    root.title(NOME_PLATAFORMA)
     root.geometry('1024x700')
     root.minsize(820, 620)
     root.state('zoomed')
@@ -2043,7 +2044,7 @@ def construir_interface(config, caminho_config):
     cabecalho.columnconfigure(1, weight=1)
     tk.Label(
         cabecalho,
-        text='Relatório Mensal de Impressoras',
+        text=NOME_PLATAFORMA,
         font=('Arial', 16, 'bold'),
         fg='#0f4c81',
         bg='white'
@@ -2114,7 +2115,10 @@ def construir_interface(config, caminho_config):
     ).pack(side='left')
     tk.Label(
         frame,
-        text='A consulta inicia ao abrir o programa. O relatório será aberto no navegador ao terminar.',
+        text=(
+            'Funções: consulta dos totalizadores das impressoras e Mapa dos APs. '
+            'A consulta das impressoras inicia ao abrir o programa e o relatório abre no navegador ao terminar.'
+        ),
         font=('Arial', 9),
         fg='#475569',
         bg='white',

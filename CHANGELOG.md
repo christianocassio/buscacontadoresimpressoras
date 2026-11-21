@@ -9,6 +9,12 @@ Padrão das páginas de Release no GitHub:
 
 ---
 
+## v1.0.21 — Plataforma Gerenciamento TI
+**Data:** 21/11/2026
+
+- O app passa a se chamar "Gerenciamento TI", com duas funções: consulta dos totalizadores das impressoras e Mapa dos APs
+- Título da janela e do cabeçalho atualizados
+
 ## v1.0.20 — Mapa dos APs embutido no programa
 **Data:** 21/11/2026
 
