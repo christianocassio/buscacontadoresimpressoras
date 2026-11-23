@@ -10,6 +10,7 @@ import socket
 import sys
 import subprocess
 import threading
+import time
 import unicodedata
 import webbrowser
 from datetime import datetime
@@ -50,12 +51,16 @@ CONFIG_PADRAO = {
     "limite_tinta": 20,
     "faixa_rede_corporativa": "192.0.2.0/24",
     "mapa_aps_titulo": "Mapa dos APs CD05 Contagem-MG PagMenos",
+    "nome_unidade": "Pague Menos CD05 Contagem-MG",
+    "wifi_coletores": "",
+    "faixa_rede_coletores": "",
+    "coletores": [],
     "impressoras": [dict(impressora) for impressora in impressoras]
 }
 PASTA_DADOS = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "ConsultaImpressoras"
-APP_VERSION = "1.0.21"
+APP_VERSION = "1.0.22"
 APP_DEVELOPER = "Christiano Miranda"
-NOME_PLATAFORMA = "Gerenciamento TI"
+NOME_PLATAFORMA = "Gestor de Infraestrutura de TI"
 URL_RELEASES = "https://github.com/christianocassio/buscacontadoresimpressoras/releases"
 TIPOS_CONEXAO = ("USB", "CABO", "WIFI")
 FAIXA_REDE_EXEMPLO = "192.0.2.0/24"
@@ -135,12 +140,19 @@ def carregar_config():
         raise ValueError(f"O arquivo de configuração deve conter um objeto JSON: {caminho}")
 
     config = {**CONFIG_PADRAO, **config_carregada}
-    for chave in ("email_padrao", "whatsapp_padrao", "mapa_aps_titulo"):
+    for chave in (
+        "email_padrao", "whatsapp_padrao", "mapa_aps_titulo",
+        "nome_unidade", "wifi_coletores", "faixa_rede_coletores",
+    ):
         if not isinstance(config[chave], str):
             raise ValueError(f"O valor de '{chave}' deve ser texto.")
     config.pop("limite_papel", None)
     config.pop("mapa_aps_arquivo", None)
     config["impressoras"] = validar_lista_impressoras(config["impressoras"])
+    config["coletores"] = validar_lista_coletores(config["coletores"])
+    config["wifi_coletores"] = config["wifi_coletores"].strip()
+    config["faixa_rede_coletores"] = config["faixa_rede_coletores"].strip()
+    validar_faixa_coletores(config["faixa_rede_coletores"])
     valor_limite_tinta = config["limite_tinta"]
     if (
         not isinstance(valor_limite_tinta, int)
@@ -1626,6 +1638,477 @@ def salvar_csv(resultados, caminho, impressoras_usb=None):
     return caminho.resolve()
 
 
+# ---------------------------------------------------------------------------
+# Módulo 3: coletores (Zebra / Honeywell)
+# ---------------------------------------------------------------------------
+FABRICANTES_COLETOR = ("Zebra", "Honeywell", "Outro")
+TITULO_COLETORES = "Coletores CD05"
+SUBTITULO_COLETORES = "Levantamento de coletores Zebra e Honeywell por setor"
+NOME_ARQUIVO_RELATORIO_COLETORES = "Clique Aqui Coletores.html"
+CAMPOS_TEXTO_COLETOR = (
+    "setor", "supervisor", "fabricante", "modelo", "numero_serie",
+    "versao_app", "versao_anterior", "hostname", "mac", "usuario", "observacao",
+)
+CAMPOS_STATUS_COLETOR = ("situacao_consultada", "ip_atual", "verificado_em", "visto_online_em")
+SITUACOES_COLETOR = {
+    "ONLINE": "Online",
+    "OFF-LINE": "Offline",
+    "SEM MAC": "Sem MAC",
+    "-": "Não verificado",
+}
+MAX_ENDERECOS_FAIXA_COLETORES = 4096
+COLUNAS_COLETORES = (
+    ("situacao_consultada", "Status"),
+    ("setor", "Setor físico"),
+    ("supervisor", "Supervisor"),
+    ("fabricante", "Fabricante"),
+    ("modelo", "Modelo"),
+    ("numero_serie", "Número de série"),
+    ("versao_app", "Versão do app"),
+    ("versao_anterior", "Versão anterior"),
+    ("hostname", "Hostname"),
+    ("mac", "MAC Wi-Fi"),
+    ("ip_atual", "IP atual"),
+    ("visto_online_em", "Visto online em"),
+    ("usuario", "Usuário"),
+    ("piloto", "Piloto"),
+    ("observacao", "Observação"),
+)
+
+
+def validar_lista_coletores(lista):
+    if lista is None:
+        return []
+    if not isinstance(lista, list):
+        raise ValueError("A lista de coletores deve ser uma lista.")
+    validados = []
+    series = set()
+    for indice, item in enumerate(lista, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"O coletor {indice} está em formato inválido.")
+        coletor = {}
+        for chave in CAMPOS_TEXTO_COLETOR:
+            valor = item.get(chave, "")
+            if valor is None:
+                valor = ""
+            if not isinstance(valor, str):
+                raise ValueError(f"O campo {chave} do coletor {indice} deve ser texto.")
+            coletor[chave] = valor.strip()
+        if not coletor["setor"]:
+            raise ValueError(f"Informe o setor do coletor {indice}.")
+        coletor["numero_serie"] = coletor["numero_serie"].upper()
+        if not coletor["numero_serie"]:
+            raise ValueError(f"Informe o número de série do coletor {indice}.")
+        if coletor["numero_serie"] in series:
+            raise ValueError(
+                f"O número de série {coletor['numero_serie']} está cadastrado mais de uma vez."
+            )
+        series.add(coletor["numero_serie"])
+        fabricante = next(
+            (f for f in FABRICANTES_COLETOR if f.casefold() == coletor["fabricante"].casefold()),
+            None,
+        )
+        if fabricante is None:
+            raise ValueError(
+                f"Fabricante inválido no coletor {indice}. Use: {', '.join(FABRICANTES_COLETOR)}."
+            )
+        coletor["fabricante"] = fabricante
+        if coletor["mac"]:
+            mac = normalizar_mac(coletor["mac"])
+            if not mac:
+                raise ValueError(f"MAC inválido no coletor {indice}: {coletor['mac']}")
+            coletor["mac"] = mac
+        coletor["piloto"] = bool(item.get("piloto", False))
+        for chave in CAMPOS_STATUS_COLETOR:
+            valor = item.get(chave, "")
+            coletor[chave] = valor.strip() if isinstance(valor, str) else ""
+        if coletor["situacao_consultada"] not in SITUACOES_COLETOR:
+            coletor["situacao_consultada"] = "-"
+        validados.append(coletor)
+    return validados
+
+
+def supervisor_do_setor(setor, registros):
+    """Supervisor já usado para o setor em qualquer cadastro (impressoras ou coletores)."""
+    alvo = str(setor or "").strip().casefold()
+    for registro in registros or []:
+        if str(registro.get("setor", "")).strip().casefold() == alvo:
+            supervisor = str(registro.get("supervisor", "")).strip()
+            if supervisor:
+                return supervisor
+    return ""
+
+
+def setores_e_supervisores(registros):
+    """Listas de setores e supervisores já cadastrados, sem repetir (ignora maiúsculas)."""
+    def unicos(chave):
+        vistos = {}
+        for registro in registros or []:
+            valor = str(registro.get(chave, "") or "").strip()
+            if valor and valor.casefold() not in vistos:
+                vistos[valor.casefold()] = valor
+        return sorted(vistos.values(), key=str.casefold)
+    return unicos("setor"), unicos("supervisor")
+
+
+def ligar_setor_ao_supervisor(variavel_setor, variavel_supervisor, registros):
+    """Ao escolher um setor conhecido, preenche o supervisor ligado a ele."""
+    def ao_mudar_setor(*_args):
+        supervisor = supervisor_do_setor(variavel_setor.get(), registros())
+        if supervisor:
+            variavel_supervisor.set(supervisor)
+    variavel_setor.trace_add("write", ao_mudar_setor)
+
+
+def coletores_ordenados(coletores):
+    return sorted(
+        coletores,
+        key=lambda c: (
+            c.get("setor", "").casefold(), c.get("fabricante", ""), c.get("numero_serie", "")
+        ),
+    )
+
+
+def texto_coluna_coletor(coletor, chave):
+    if chave == "situacao_consultada":
+        return SITUACOES_COLETOR.get(coletor.get(chave) or "-", "Não verificado")
+    if chave == "piloto":
+        return "Sim" if coletor.get("piloto") else "Não"
+    return limpar_texto(coletor.get(chave))
+
+
+def valor_csv_seguro(valor):
+    """Evita que o Excel interprete o texto como fórmula."""
+    texto = str(valor)
+    if texto != "-" and texto[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + texto
+    return texto
+
+
+def salvar_csv_coletores(coletores, caminho):
+    caminho = Path(caminho)
+    with caminho.open("w", newline="", encoding="utf-8-sig") as arquivo:
+        escritor = csv.writer(arquivo)
+        escritor.writerow([rotulo for _, rotulo in COLUNAS_COLETORES])
+        for coletor in coletores_ordenados(coletores):
+            escritor.writerow([
+                valor_csv_seguro(texto_coluna_coletor(coletor, chave))
+                for chave, _ in COLUNAS_COLETORES
+            ])
+    return caminho.resolve()
+
+
+# ================= STATUS DOS COLETORES (REDE WI-FI) =================
+def validar_faixa_coletores(faixa_texto):
+    if not faixa_texto:
+        return None
+    try:
+        faixa = ipaddress.ip_network(faixa_texto, strict=False)
+    except ValueError as exc:
+        raise ValueError(
+            "A faixa da rede dos coletores deve estar em formato CIDR IPv4, por exemplo 10.50.0.0/22."
+        ) from exc
+    if faixa.version != 4:
+        raise ValueError("A faixa da rede dos coletores deve ser IPv4.")
+    if faixa.num_addresses > MAX_ENDERECOS_FAIXA_COLETORES:
+        raise ValueError(
+            "A faixa da rede dos coletores é grande demais (máximo /20, 4096 endereços)."
+        )
+    return faixa
+
+
+def aviso_rede_coletores(config):
+    wifi = str(config.get("wifi_coletores") or "").strip()
+    unidade = str(config.get("nome_unidade") or "").strip() or "da unidade"
+    rede = f' "{wifi}"' if wifi else ""
+    return (
+        f"Conecte na rede Wi-Fi dos coletores{rede} para ter o resultado de status "
+        f"online e offline de todos os coletores cadastrados como ativo {unidade}."
+    )
+
+
+def ssids_conectados():
+    """Nomes das redes Wi-Fi conectadas agora (netsh wlan show interfaces)."""
+    netsh = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "netsh.exe"
+    try:
+        processo = subprocess.run(
+            [str(netsh), "wlan", "show", "interfaces"],
+            capture_output=True, encoding="oem", errors="replace", timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return extrair_ssids(processo.stdout)
+
+
+def extrair_ssids(texto):
+    return re.findall(r"^\s*SSID\s*:\s*(.+?)\s*$", texto or "", re.MULTILINE)
+
+
+def ip_local_para(destino):
+    """IP deste computador usado para chegar ao destino ('' se não houver rota)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as conexao:
+        try:
+            conexao.connect((str(destino), 9))
+            return conexao.getsockname()[0]
+        except OSError:
+            return ""
+
+
+def situacao_rede_coletores(config, ssids=None, ip_local=None):
+    """(conectado, mensagem): o computador está na rede Wi-Fi/faixa dos coletores?"""
+    faixa = validar_faixa_coletores(str(config.get("faixa_rede_coletores") or "").strip())
+    if faixa is None:
+        return False, (
+            "A rede dos coletores ainda não foi configurada. Informe "
+            '"wifi_coletores" e "faixa_rede_coletores" no config.json.'
+        )
+    wifi = str(config.get("wifi_coletores") or "").strip()
+    if wifi:
+        if ssids is None:
+            ssids = ssids_conectados()
+        if not any(s.casefold() == wifi.casefold() for s in ssids):
+            return False, aviso_rede_coletores(config)
+    if ip_local is None:
+        ip_local = ip_local_para(next(faixa.hosts(), faixa.network_address))
+    try:
+        dentro = bool(ip_local) and ipaddress.ip_address(ip_local) in faixa
+    except ValueError:
+        dentro = False
+    if not dentro:
+        return False, aviso_rede_coletores(config)
+    return True, f"Conectado à rede dos coletores (IP deste computador: {ip_local})."
+
+
+def ler_tabela_arp(texto=None):
+    """{MAC: IP} da tabela ARP do Windows (arp -a), sem broadcast/multicast."""
+    if texto is None:
+        arp = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "arp.exe"
+        try:
+            texto = subprocess.run(
+                [str(arp), "-a"], capture_output=True, encoding="oem", errors="replace",
+                timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return {}
+    tabela = {}
+    for ip, mac_bruto in re.findall(
+        r"((?:\d{1,3}\.){3}\d{1,3})\s+([0-9A-Fa-f]{2}(?:[-:][0-9A-Fa-f]{2}){5})", texto or ""
+    ):
+        mac = normalizar_mac(mac_bruto)
+        if not mac or mac in ("FF:FF:FF:FF:FF:FF", "00:00:00:00:00:00"):
+            continue
+        if int(mac[:2], 16) & 1:  # multicast
+            continue
+        tabela[mac] = ip
+    return tabela
+
+
+def macs_na_rede_coletores(faixa_texto, passadas=2, espera=2.0):
+    """Provoca a resolução ARP de todos os IPs da faixa e devolve {MAC: IP} encontrados."""
+    faixa = validar_faixa_coletores(faixa_texto)
+    if faixa is None:
+        return {}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as conexao:
+        conexao.setblocking(False)
+        for _ in range(passadas):
+            for endereco in faixa.hosts():
+                try:
+                    conexao.sendto(b"\0", (str(endereco), 9))
+                except OSError:
+                    pass
+            time.sleep(espera)
+    return {
+        mac: ip for mac, ip in ler_tabela_arp().items()
+        if ipaddress.ip_address(ip) in faixa
+    }
+
+
+def aplicar_status_coletores(coletores, macs_online, quando):
+    """Marca cada coletor como ONLINE/OFF-LINE/SEM MAC pelo MAC Wi-Fi cadastrado."""
+    atualizados = []
+    for coletor in coletores:
+        novo = dict(coletor)
+        mac = normalizar_mac(novo.get("mac"))
+        novo["verificado_em"] = quando
+        if not mac:
+            novo["situacao_consultada"] = "SEM MAC"
+            novo["ip_atual"] = ""
+        elif mac in macs_online:
+            novo["situacao_consultada"] = "ONLINE"
+            novo["ip_atual"] = macs_online[mac]
+            novo["visto_online_em"] = quando
+        else:
+            novo["situacao_consultada"] = "OFF-LINE"
+            novo["ip_atual"] = ""
+        atualizados.append(novo)
+    return atualizados
+
+
+def ultima_verificacao_coletores(coletores):
+    datas = [c.get("verificado_em") for c in coletores if c.get("verificado_em")]
+    if not datas:
+        return ""
+    return max(datas, key=lambda d: datetime.strptime(d, "%d/%m/%Y %H:%M:%S")
+               if re.fullmatch(r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}", d) else datetime.min)
+
+
+def resumo_status_coletores(coletores):
+    contagem = {chave: 0 for chave in SITUACOES_COLETOR}
+    for coletor in coletores:
+        contagem[coletor.get("situacao_consultada") or "-"] = (
+            contagem.get(coletor.get("situacao_consultada") or "-", 0) + 1
+        )
+    return contagem
+
+
+def gerar_html_coletores(coletores, data_geracao, aviso=""):
+    ordenados = coletores_ordenados(coletores)
+    status = resumo_status_coletores(ordenados)
+    ultima = ultima_verificacao_coletores(ordenados)
+    por_fabricante = {
+        f: sum(c["fabricante"] == f for c in ordenados) for f in FABRICANTES_COLETOR
+    }
+    setores = []
+    for c in ordenados:
+        if c["setor"] not in setores:
+            setores.append(c["setor"])
+    versoes = {}
+    for c in ordenados:
+        versao = c.get("versao_app") or "Não informada"
+        versoes[versao] = versoes.get(versao, 0) + 1
+
+    chips_status = (
+        ("Online", status["ONLINE"], "online"),
+        ("Offline", status["OFF-LINE"], "offline"),
+        ("Não verificado", status["-"], "neutro"),
+        ("Sem MAC", status["SEM MAC"], "neutro"),
+    )
+    html_chips_status = "".join(
+        f'<div class="chip chip-{classe}"><strong>{escapar_html(rotulo)}</strong><span>{valor}</span></div>'
+        for rotulo, valor, classe in chips_status
+    )
+    html_aviso = (
+        f'<div class="aviso">📶 {escapar_html(aviso)}</div>' if aviso else ""
+    )
+    texto_ultima = (
+        f"Última verificação de status: {escapar_html(ultima)}" if ultima
+        else "Status ainda não verificado nesta unidade."
+    )
+    chips = (
+        ("Total de coletores", len(ordenados)),
+        ("Zebra", por_fabricante["Zebra"]),
+        ("Honeywell", por_fabricante["Honeywell"]),
+        ("Outros", por_fabricante["Outro"]),
+        ("No piloto", sum(bool(c.get("piloto")) for c in ordenados)),
+        ("Setores", len(setores)),
+    )
+    html_chips = "".join(
+        f'<div class="chip"><strong>{escapar_html(rotulo)}</strong><span>{valor}</span></div>'
+        for rotulo, valor in chips
+    )
+    html_versoes = "".join(
+        f'<span class="versao"><strong>{escapar_html(versao)}</strong> · {qtd}</span>'
+        for versao, qtd in sorted(versoes.items(), key=lambda par: (-par[1], par[0]))
+    ) or '<span class="versao">Nenhum coletor cadastrado</span>'
+
+    total_colunas = len(COLUNAS_COLETORES)
+    cabecalho = "".join(f"<th>{escapar_html(rotulo)}</th>" for _, rotulo in COLUNAS_COLETORES)
+    linhas = []
+    for setor in setores:
+        do_setor = [c for c in ordenados if c["setor"] == setor]
+        linhas.append(
+            f'<tr class="grupo-setor"><td colspan="{total_colunas}">'
+            f'{escapar_html(setor)} — {len(do_setor)} coletor(es)</td></tr>'
+        )
+        for c in do_setor:
+            classe = ' class="piloto"' if c.get("piloto") else ""
+            celulas = "".join(
+                (
+                    f'<td><span class="status st-{escapar_html((c.get(chave) or "-").lower())}">'
+                    f"{escapar_html(texto_coluna_coletor(c, chave))}</span></td>"
+                ) if chave == "situacao_consultada" else
+                f"<td>{escapar_html(texto_coluna_coletor(c, chave))}</td>"
+                for chave, _ in COLUNAS_COLETORES
+            )
+            linhas.append(f"<tr{classe}>{celulas}</tr>")
+    corpo_tabela = "".join(linhas) or (
+        f'<tr><td colspan="{total_colunas}">Nenhum coletor cadastrado.</td></tr>'
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{escapar_html(TITULO_COLETORES)}</title>
+<style>
+    body {{ margin: 0; padding: 20px; background: #eef3f8; color: #1e293b; font-family: Arial, sans-serif; }}
+    .container {{ max-width: 1280px; margin: 0 auto; }}
+    .cabecalho {{ background: linear-gradient(135deg, #0f4c81, #1d72b8); color: #fff; border-radius: 12px; padding: 22px; text-align: center; margin-bottom: 18px; }}
+    .cabecalho h1 {{ margin: 0 0 6px; font-size: 26px; }}
+    .cabecalho p {{ margin: 0; opacity: .9; }}
+    .bloco {{ background: #fff; border-radius: 10px; padding: 16px 20px; margin-bottom: 18px; box-shadow: 0 2px 6px rgba(0,0,0,.06); }}
+    .resumo {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }}
+    .chip {{ background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; }}
+    .chip strong {{ display: block; font-size: 11px; text-transform: uppercase; color: #475569; letter-spacing: .4px; }}
+    .chip span {{ font-size: 20px; font-weight: 700; color: #0f4c81; }}
+    .versoes {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }}
+    .versao {{ background: #e0f2fe; color: #075985; border-radius: 999px; padding: 4px 12px; font-size: 13px; }}
+    h2 {{ margin: 0 0 8px; color: #0f4c81; font-size: 18px; }}
+    .tabela {{ overflow-x: auto; }}
+    table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+    th {{ background: #1d4ed8; color: #fff; text-align: left; padding: 8px 10px; white-space: nowrap; }}
+    td {{ border-bottom: 1px solid #e2e8f0; padding: 7px 10px; white-space: nowrap; }}
+    tr.grupo-setor td {{ background: #dbeafe; color: #1e3a8a; font-weight: 700; text-transform: uppercase; }}
+    tr.piloto td {{ background: #fef9c3; }}
+    .legenda {{ font-size: 12px; color: #64748b; margin-top: 8px; }}
+    .aviso {{ background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; font-weight: 700; }}
+    .chip-online {{ background: #dcfce7; border-color: #86efac; }}
+    .chip-online span {{ color: #15803d; }}
+    .chip-offline {{ background: #fee2e2; border-color: #fca5a5; }}
+    .chip-offline span {{ color: #b91c1c; }}
+    .chip-neutro span {{ color: #64748b; }}
+    .verificacao {{ font-size: 13px; color: #475569; margin-top: 6px; }}
+    .status {{ display: inline-block; border-radius: 999px; padding: 2px 10px; font-weight: 700; font-size: 12px; }}
+    .status::before {{ content: "●"; margin-right: 5px; }}
+    .st-online {{ background: #dcfce7; color: #15803d; }}
+    .st-off-line {{ background: #fee2e2; color: #b91c1c; }}
+    .st-- , .st-sem {{ background: #f1f5f9; color: #64748b; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="cabecalho">
+        <h1>📟 {escapar_html(TITULO_COLETORES)}</h1>
+        <p>{escapar_html(SUBTITULO_COLETORES)}</p>
+    </div>
+    {html_aviso}
+    <div class="bloco">
+        <h2>Situação dos coletores</h2>
+        <div class="verificacao">{texto_ultima}</div>
+        <div class="resumo">{html_chips_status}</div>
+    </div>
+    <div class="bloco">
+        <strong>📅 Gerado em:</strong> {escapar_html(data_geracao)}
+        <div class="resumo">{html_chips}</div>
+        <h2 style="margin-top:16px">Versões do app de gerenciamento</h2>
+        <div class="versoes">{html_versoes}</div>
+    </div>
+    <div class="bloco">
+        <h2>Coletores por setor</h2>
+        <div class="tabela"><table class="tabela-coletores">
+            <thead><tr>{cabecalho}</tr></thead>
+            <tbody>{corpo_tabela}</tbody>
+        </table></div>
+        <p class="legenda">Linhas em amarelo: coletores do piloto da versão nova do app.</p>
+    </div>
+</div>
+</body>
+</html>
+"""
+
+
 def abrir_relatorio_navegador(caminho_arquivo):
     if not webbrowser.open(Path(caminho_arquivo).resolve().as_uri(), new=2):
         raise RuntimeError('Não foi possível abrir o navegador padrão.')
@@ -2015,7 +2498,6 @@ def construir_interface(config, caminho_config):
     pasta_relatorios.mkdir(parents=True, exist_ok=True)
 
     area_rolagem = tk.Frame(root, bg='#eef3f8')
-    area_rolagem.pack(fill='both', expand=True)
     canvas = tk.Canvas(area_rolagem, bg='#eef3f8', borderwidth=0, highlightthickness=0)
     rolagem_vertical = ttk.Scrollbar(
         area_rolagem,
@@ -2044,7 +2526,7 @@ def construir_interface(config, caminho_config):
     cabecalho.columnconfigure(1, weight=1)
     tk.Label(
         cabecalho,
-        text=NOME_PLATAFORMA,
+        text='Gestão Impressoras',
         font=('Arial', 16, 'bold'),
         fg='#0f4c81',
         bg='white'
@@ -2097,27 +2579,11 @@ def construir_interface(config, caminho_config):
         except RuntimeError as exc:
             messagebox.showerror('Não foi possível abrir o mapa', str(exc), parent=root)
 
-    barra_mapa = tk.Frame(cabecalho, bg='white')
-    barra_mapa.grid(row=1, column=1, columnspan=2, sticky='e', pady=(4, 0))
-    tk.Button(
-        barra_mapa,
-        text=config['mapa_aps_titulo'],
-        command=abrir_mapa_aps,
-        bg='#0891b2',
-        fg='white',
-        activebackground='#0e7490',
-        activeforeground='white',
-        font=('Arial', 9, 'bold'),
-        relief='flat',
-        padx=10,
-        pady=4,
-        cursor='hand2'
-    ).pack(side='left')
     tk.Label(
         frame,
         text=(
-            'Funções: consulta dos totalizadores das impressoras e Mapa dos APs. '
-            'A consulta das impressoras inicia ao abrir o programa e o relatório abre no navegador ao terminar.'
+            'Consulta dos totalizadores, tinta e situação das impressoras. '
+            'A consulta inicia ao abrir esta tela e o relatório abre no navegador ao terminar.'
         ),
         font=('Arial', 9),
         fg='#475569',
@@ -2509,18 +2975,31 @@ def construir_interface(config, caminho_config):
             )
             variaveis = {}
             entradas = {}
+            setores_opcoes, supervisores_opcoes = setores_e_supervisores(
+                lista_editada + config.get('coletores', [])
+            )
             for linha, (rotulo, chave) in enumerate(campos):
                 tk.Label(formulario, text=rotulo, font=('Arial', 10, 'bold')).grid(
                     row=linha, column=0, sticky='w', padx=16, pady=(12 if linha == 0 else 6, 3)
                 )
                 variavel = tk.StringVar(value=registro.get(chave, ''))
                 variaveis[chave] = variavel
-                entrada = tk.Entry(formulario, textvariable=variavel, font=('Arial', 10), width=40)
+                if chave in ('setor', 'supervisor'):
+                    entrada = ttk.Combobox(
+                        formulario, textvariable=variavel, width=37,
+                        values=setores_opcoes if chave == 'setor' else supervisores_opcoes
+                    )
+                else:
+                    entrada = tk.Entry(formulario, textvariable=variavel, font=('Arial', 10), width=40)
                 entrada.grid(
                     row=linha, column=1, sticky='ew', padx=(8, 16), pady=(12 if linha == 0 else 6, 3)
                 )
                 entradas[chave] = entrada
             formulario.columnconfigure(1, weight=1)
+            ligar_setor_ao_supervisor(
+                variaveis['setor'], variaveis['supervisor'],
+                lambda: lista_editada + config.get('coletores', [])
+            )
             variaveis['tipo_conexao'] = tk.StringVar(
                 value=registro.get('tipo_conexao')
                 or tipo_conexao_padrao(registro.get('nome', ''))
@@ -2737,6 +3216,219 @@ def construir_interface(config, caminho_config):
             relief='flat',
             padx=14
         ).grid(row=1, column=3, sticky='e', padx=(4, 12), pady=(0, 12))
+        atualizar_tabela()
+
+    def abrir_coletores():
+        janela = tk.Toplevel(root)
+        janela.title('Coletores da unidade')
+        janela.geometry('1320x480')
+        janela.minsize(1100, 400)
+        janela.transient(root)
+        janela.columnconfigure(0, weight=1)
+        janela.rowconfigure(0, weight=1)
+
+        lista_editada = [dict(item) for item in config.get('coletores', [])]
+        colunas = tuple(chave for chave, _ in COLUNAS_COLETORES if chave != 'observacao')
+        larguras = {
+            'situacao_consultada': 100, 'ip_atual': 105, 'visto_online_em': 135,
+            'setor': 130, 'supervisor': 110, 'fabricante': 90, 'modelo': 90,
+            'numero_serie': 130, 'versao_app': 100, 'versao_anterior': 100,
+            'hostname': 120, 'mac': 130, 'usuario': 110, 'piloto': 60,
+        }
+        tabela = ttk.Treeview(janela, columns=colunas, show='headings', selectmode='browse')
+        for chave, rotulo in COLUNAS_COLETORES:
+            if chave in colunas:
+                tabela.heading(chave, text=rotulo)
+                tabela.column(chave, width=larguras[chave], anchor='w')
+        tabela.tag_configure('piloto', background='#fef9c3')
+        tabela.tag_configure('online', foreground='#15803d')
+        tabela.tag_configure('offline', foreground='#b91c1c')
+        tabela.grid(row=0, column=0, columnspan=6, sticky='nsew', padx=(12, 0), pady=12)
+        rolagem = ttk.Scrollbar(janela, orient='vertical', command=tabela.yview)
+        rolagem.grid(row=0, column=6, sticky='ns', padx=(0, 12), pady=12)
+        tabela.configure(yscrollcommand=rolagem.set)
+
+        total_var = tk.StringVar()
+
+        def atualizar_tabela():
+            itens = tabela.get_children()
+            if itens:
+                tabela.delete(*itens)
+            for indice, item in enumerate(lista_editada):
+                tabela.insert(
+                    '', tk.END, iid=str(indice),
+                    values=[texto_coluna_coletor(item, chave) for chave in colunas],
+                    tags=tuple(
+                        tag for tag, ativo in (
+                            ('piloto', item.get('piloto')),
+                            ('online', item.get('situacao_consultada') == 'ONLINE'),
+                            ('offline', item.get('situacao_consultada') == 'OFF-LINE'),
+                        ) if ativo
+                    ),
+                )
+            total_var.set(
+                f"{len(lista_editada)} coletor(es) | "
+                f"{sum(bool(c.get('piloto')) for c in lista_editada)} no piloto"
+            )
+
+        def editar_coletor(indice=None):
+            registro = lista_editada[indice] if indice is not None else {
+                chave: '' for chave in CAMPOS_TEXTO_COLETOR
+            }
+            if indice is None:
+                registro['fabricante'] = 'Zebra'
+                registro['piloto'] = False
+            formulario = tk.Toplevel(janela)
+            formulario.title('Editar coletor' if indice is not None else 'Adicionar coletor')
+            formulario.geometry('520x560')
+            formulario.resizable(False, False)
+            formulario.transient(janela)
+            formulario.grab_set()
+            formulario.columnconfigure(1, weight=1)
+
+            setores_opcoes, supervisores_opcoes = setores_e_supervisores(
+                config['impressoras'] + lista_editada
+            )
+            campos = (
+                ('Setor físico', 'setor'),
+                ('Supervisor', 'supervisor'),
+                ('Fabricante', 'fabricante'),
+                ('Modelo', 'modelo'),
+                ('Número de série', 'numero_serie'),
+                ('Versão do app', 'versao_app'),
+                ('Versão anterior (piloto)', 'versao_anterior'),
+                ('Hostname', 'hostname'),
+                ('MAC Wi-Fi', 'mac'),
+                ('Usuário / responsável', 'usuario'),
+                ('Observação', 'observacao'),
+            )
+            variaveis = {}
+            for linha, (rotulo, chave) in enumerate(campos):
+                tk.Label(formulario, text=rotulo, font=('Arial', 10, 'bold')).grid(
+                    row=linha, column=0, sticky='w', padx=16, pady=(12 if linha == 0 else 5, 3)
+                )
+                variavel = tk.StringVar(value=registro.get(chave, ''))
+                variaveis[chave] = variavel
+                if chave in ('setor', 'supervisor'):
+                    campo = ttk.Combobox(
+                        formulario, textvariable=variavel, width=37,
+                        values=setores_opcoes if chave == 'setor' else supervisores_opcoes
+                    )
+                elif chave == 'fabricante':
+                    campo = ttk.Combobox(
+                        formulario, textvariable=variavel, values=FABRICANTES_COLETOR,
+                        state='readonly', width=37
+                    )
+                else:
+                    campo = tk.Entry(formulario, textvariable=variavel, font=('Arial', 10), width=40)
+                campo.grid(
+                    row=linha, column=1, sticky='ew', padx=(8, 16),
+                    pady=(12 if linha == 0 else 5, 3)
+                )
+
+            ligar_setor_ao_supervisor(
+                variaveis['setor'], variaveis['supervisor'],
+                lambda: config['impressoras'] + lista_editada
+            )
+
+            piloto_var = tk.BooleanVar(value=bool(registro.get('piloto')))
+            tk.Checkbutton(
+                formulario, text='Coletor do piloto da versão nova do app',
+                variable=piloto_var, font=('Arial', 10)
+            ).grid(row=len(campos), column=0, columnspan=2, sticky='w', padx=16, pady=(8, 2))
+
+            def salvar_coletor():
+                novo = {chave: variavel.get().strip() for chave, variavel in variaveis.items()}
+                novo['piloto'] = piloto_var.get()
+                if normalizar_mac(novo['mac']) == normalizar_mac(registro.get('mac')):
+                    for chave in CAMPOS_STATUS_COLETOR:
+                        novo[chave] = registro.get(chave, '')
+                nova_lista = [dict(item) for item in lista_editada]
+                if indice is None:
+                    nova_lista.append(novo)
+                else:
+                    nova_lista[indice] = novo
+                try:
+                    lista_validada = validar_lista_coletores(nova_lista)
+                except ValueError as exc:
+                    messagebox.showerror('Dados inválidos', str(exc), parent=formulario)
+                    return
+                lista_editada[:] = lista_validada
+                atualizar_tabela()
+                formulario.destroy()
+
+            tk.Button(
+                formulario, text='Salvar', command=salvar_coletor,
+                bg='#0f4c81', fg='white', relief='flat', padx=16, pady=7
+            ).grid(row=len(campos) + 1, column=0, columnspan=2, pady=14)
+
+        def selecionado(acao):
+            selecao = tabela.selection()
+            if not selecao:
+                messagebox.showinfo(
+                    'Selecione um coletor', f'Selecione um coletor para {acao}.', parent=janela
+                )
+                return None
+            return int(selecao[0])
+
+        def alterar_coletor():
+            indice = selecionado('editar')
+            if indice is not None:
+                editar_coletor(indice)
+
+        def remover_coletor():
+            indice = selecionado('remover')
+            if indice is None:
+                return
+            item = lista_editada[indice]
+            if messagebox.askyesno(
+                'Remover coletor',
+                f"Remover o coletor {item.get('numero_serie')} ({item.get('setor')})?",
+                parent=janela
+            ):
+                del lista_editada[indice]
+                atualizar_tabela()
+
+        def salvar_lista(fechar=True):
+            try:
+                coletores_validados = validar_lista_coletores(lista_editada)
+                config_atualizada = {**config, 'coletores': coletores_validados}
+                salvar_config(config_atualizada, caminho_config)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror('Não foi possível salvar os coletores', str(exc), parent=janela)
+                return False
+            config.update(config_atualizada)
+            status_var.set(f"Lista de {len(coletores_validados)} coletor(es) salva.")
+            atualizar_resumo_coletores()
+            if fechar:
+                janela.destroy()
+            return True
+
+        def gerar_relatorio():
+            if salvar_lista(fechar=False):
+                gerar_e_abrir_relatorio_coletores(janela)
+
+        tk.Button(janela, text='Adicionar', command=editar_coletor).grid(
+            row=1, column=0, sticky='w', padx=12, pady=(0, 12)
+        )
+        tk.Button(janela, text='Editar', command=alterar_coletor).grid(
+            row=1, column=1, sticky='w', padx=4, pady=(0, 12)
+        )
+        tk.Button(janela, text='Remover', command=remover_coletor).grid(
+            row=1, column=2, sticky='w', padx=4, pady=(0, 12)
+        )
+        tk.Label(janela, textvariable=total_var, fg='#475569').grid(
+            row=1, column=3, sticky='w', padx=12, pady=(0, 12)
+        )
+        tk.Button(
+            janela, text='Gerar relatório', command=gerar_relatorio,
+            bg='#0891b2', fg='white', relief='flat', padx=14
+        ).grid(row=1, column=4, sticky='e', padx=4, pady=(0, 12))
+        tk.Button(
+            janela, text='Salvar lista', command=salvar_lista,
+            bg='#0f4c81', fg='white', relief='flat', padx=14
+        ).grid(row=1, column=5, sticky='e', padx=(4, 12), pady=(0, 12))
+        tabela.bind('<Double-1>', lambda _event: alterar_coletor())
         atualizar_tabela()
 
     def avisar_dados_usb_pendentes():
@@ -3012,7 +3704,287 @@ def construir_interface(config, caminho_config):
         atualizar_progresso(0, 'Verificando a conexão com a rede corporativa...')
         threading.Thread(target=consulta_em_segundo_plano, daemon=True).start()
 
-    iniciar_consulta()
+    # ------------------------------------------------------------------
+    # Navegação: tela inicial, Gestão Impressoras e Gestão Coletores
+    # ------------------------------------------------------------------
+    COR_FUNDO = '#eef3f8'
+    telas = {}
+    consulta_iniciada = {'feita': False}
+
+    def mostrar_tela(nome):
+        for tela in (tela_inicial, area_rolagem, tela_coletores):
+            tela.pack_forget()
+        telas[nome].pack(fill='both', expand=True)
+        titulos = {
+            'inicio': NOME_PLATAFORMA,
+            'impressoras': f'{NOME_PLATAFORMA} — Gestão Impressoras',
+            'coletores': f'{NOME_PLATAFORMA} — Gestão Coletores',
+        }
+        root.title(titulos[nome])
+
+    def mostrar_inicio():
+        mostrar_tela('inicio')
+
+    def mostrar_impressoras():
+        mostrar_tela('impressoras')
+        if not consulta_iniciada['feita']:
+            consulta_iniciada['feita'] = True
+            iniciar_consulta()
+
+    def mostrar_coletores():
+        conferir_rede_coletores()
+        atualizar_resumo_coletores()
+        mostrar_tela('coletores')
+
+    def mostrar_sobre():
+        messagebox.showinfo(
+            'Sobre',
+            f'{NOME_PLATAFORMA}\n\n'
+            f'Versão {APP_VERSION}\n'
+            f'{texto_versao_aplicativo()}\n\n'
+            'Módulos: Gestão Impressoras, Gestão APs e Gestão Coletores.',
+            parent=root
+        )
+
+    rede_coletores = {'conectado': False, 'mensagem': ''}
+
+    def conferir_rede_coletores():
+        try:
+            conectado, mensagem = situacao_rede_coletores(config)
+        except ValueError as exc:
+            conectado, mensagem = False, str(exc)
+        rede_coletores.update(conectado=conectado, mensagem=mensagem)
+        return conectado, mensagem
+
+    def gerar_e_abrir_relatorio_coletores(parent):
+        try:
+            pasta_relatorios.mkdir(parents=True, exist_ok=True)
+            agora = datetime.now()
+            aviso = '' if rede_coletores['conectado'] else aviso_rede_coletores(config)
+            caminho_html = salvar_relatorio(
+                gerar_html_coletores(
+                    config['coletores'], agora.strftime('%d/%m/%Y %H:%M:%S'), aviso
+                ),
+                pasta_relatorios / NOME_ARQUIVO_RELATORIO_COLETORES
+            )
+            salvar_csv_coletores(
+                config['coletores'],
+                pasta_relatorios / f"coletores_{agora.strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+            abrir_relatorio_navegador(caminho_html)
+        except (OSError, RuntimeError) as exc:
+            messagebox.showerror('Não foi possível gerar o relatório', str(exc), parent=parent)
+            return False
+        status_var.set(
+            f"Relatório de {len(config['coletores'])} coletor(es) gerado em {pasta_relatorios}."
+        )
+        return True
+
+    def botao_voltar(pai):
+        return tk.Button(
+            pai, text='← Início', command=mostrar_inicio,
+            bg='#e2e8f0', fg='#0f172a', activebackground='#cbd5e1',
+            font=('Arial', 9, 'bold'), relief='flat', padx=10, pady=3, cursor='hand2'
+        )
+
+    # Botão "Início" na tela de impressoras (ao lado de Releases)
+    botao_voltar(cabecalho).grid(row=0, column=3, sticky='e', padx=(6, 0))
+
+    # Menu do sistema
+    barra_menu = tk.Menu(root)
+    menu_sistema = tk.Menu(barra_menu, tearoff=0)
+    menu_sistema.add_command(label='Início', command=mostrar_inicio)
+    menu_sistema.add_separator()
+    menu_sistema.add_command(label='Sair', command=root.destroy)
+    barra_menu.add_cascade(label='Sistema', menu=menu_sistema)
+    menu_modulos = tk.Menu(barra_menu, tearoff=0)
+    menu_modulos.add_command(label='Gestão Impressoras', command=mostrar_impressoras)
+    menu_modulos.add_command(label='Gestão APs', command=abrir_mapa_aps)
+    menu_modulos.add_command(label='Gestão Coletores', command=mostrar_coletores)
+    barra_menu.add_cascade(label='Módulos', menu=menu_modulos)
+    menu_ajuda = tk.Menu(barra_menu, tearoff=0)
+    menu_ajuda.add_command(label='Sobre', command=mostrar_sobre)
+    menu_ajuda.add_command(label='Releases', command=abrir_releases)
+    barra_menu.add_cascade(label='Ajuda', menu=menu_ajuda)
+    root.config(menu=barra_menu)
+
+    # Tela inicial
+    tela_inicial = tk.Frame(root, bg=COR_FUNDO)
+    centro = tk.Frame(tela_inicial, bg=COR_FUNDO)
+    centro.place(relx=0.5, rely=0.45, anchor='center')
+    faixa_titulo = tk.Frame(centro, bg='#0f4c81', padx=40, pady=22)
+    faixa_titulo.pack(fill='x')
+    tk.Label(
+        faixa_titulo, text=NOME_PLATAFORMA, font=('Arial', 24, 'bold'),
+        fg='white', bg='#0f4c81'
+    ).pack()
+    tk.Label(
+        faixa_titulo, text='Escolha o módulo que deseja abrir',
+        font=('Arial', 11), fg='#dbeafe', bg='#0f4c81'
+    ).pack(pady=(4, 0))
+
+    cartoes = tk.Frame(centro, bg=COR_FUNDO)
+    cartoes.pack(pady=24)
+    for coluna, (titulo, descricao, cor, cor_ativa, comando) in enumerate((
+        ('Gestão Impressoras', 'Contadores, tinta, situação\ne relatórios das impressoras',
+         '#0f4c81', '#0b3a63', mostrar_impressoras),
+        ('Gestão APs', 'Mapa dos access points\ne racks da unidade',
+         '#0891b2', '#0e7490', abrir_mapa_aps),
+        ('Gestão Coletores', 'Cadastro e mapa dos\ncoletores Zebra e Honeywell',
+         '#7c3aed', '#6d28d9', mostrar_coletores),
+    )):
+        tk.Button(
+            cartoes, text=f'{titulo}\n\n{descricao}', command=comando,
+            bg=cor, fg='white', activebackground=cor_ativa, activeforeground='white',
+            font=('Arial', 12, 'bold'), relief='flat', width=22, height=6,
+            justify='center', cursor='hand2'
+        ).grid(row=0, column=coluna, padx=10)
+
+    caixa_sobre = tk.LabelFrame(
+        centro, text=' Sobre ', font=('Arial', 10, 'bold'),
+        bg='white', fg='#0f4c81', padx=16, pady=10
+    )
+    caixa_sobre.pack(fill='x')
+    caixa_sobre.columnconfigure(0, weight=1)
+    tk.Label(
+        caixa_sobre, text=texto_versao_aplicativo(), font=('Arial', 10),
+        fg='#334155', bg='white'
+    ).grid(row=0, column=0, sticky='w')
+    tk.Label(
+        caixa_sobre,
+        text='Desenvolvido para apoio ao TI: impressoras, access points e coletores.',
+        font=('Arial', 9), fg='#64748b', bg='white'
+    ).grid(row=1, column=0, sticky='w', pady=(2, 0))
+    tk.Button(
+        caixa_sobre, text='Releases', command=abrir_releases,
+        bg='#0f4c81', fg='white', activebackground='#0b3a63', activeforeground='white',
+        font=('Arial', 9, 'bold'), relief='flat', padx=12, pady=4, cursor='hand2'
+    ).grid(row=0, column=1, rowspan=2, sticky='e')
+
+    # Tela Gestão Coletores
+    tela_coletores = tk.Frame(root, bg=COR_FUNDO)
+    painel_coletores = tk.Frame(tela_coletores, bg='white', padx=20, pady=16)
+    painel_coletores.pack(fill='x', padx=16, pady=16)
+    painel_coletores.columnconfigure(0, weight=1)
+    tk.Label(
+        painel_coletores, text='Gestão Coletores', font=('Arial', 16, 'bold'),
+        fg='#7c3aed', bg='white'
+    ).grid(row=0, column=0, sticky='w')
+    botao_voltar(painel_coletores).grid(row=0, column=1, sticky='e')
+    resumo_coletores_var = tk.StringVar()
+    tk.Label(
+        painel_coletores, textvariable=resumo_coletores_var, font=('Arial', 10),
+        fg='#475569', bg='white', justify='left'
+    ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 4))
+    status_coletores_var = tk.StringVar()
+    rotulo_status_coletores = tk.Label(
+        painel_coletores, textvariable=status_coletores_var, font=('Arial', 11, 'bold'),
+        bg='white', justify='left'
+    )
+    rotulo_status_coletores.grid(row=2, column=0, columnspan=2, sticky='w', pady=(0, 8))
+    aviso_coletores_var = tk.StringVar()
+    rotulo_aviso_coletores = tk.Label(
+        painel_coletores, textvariable=aviso_coletores_var, font=('Arial', 10, 'bold'),
+        justify='left', anchor='w', wraplength=900, padx=12, pady=8
+    )
+    rotulo_aviso_coletores.grid(row=3, column=0, columnspan=2, sticky='ew', pady=(0, 14))
+
+    def atualizar_resumo_coletores():
+        coletores = config.get('coletores', [])
+        zebra = sum(c.get('fabricante') == 'Zebra' for c in coletores)
+        honeywell = sum(c.get('fabricante') == 'Honeywell' for c in coletores)
+        piloto = sum(bool(c.get('piloto')) for c in coletores)
+        setores = len({c.get('setor', '').casefold() for c in coletores})
+        resumo_coletores_var.set(
+            f'{len(coletores)} coletor(es) cadastrado(s) — Zebra: {zebra} | '
+            f'Honeywell: {honeywell} | No piloto: {piloto} | Setores: {setores}'
+        )
+        contagem = resumo_status_coletores(coletores)
+        ultima = ultima_verificacao_coletores(coletores)
+        status_coletores_var.set(
+            f"● Online: {contagem['ONLINE']}    ● Offline: {contagem['OFF-LINE']}    "
+            f"Não verificado: {contagem['-']}    Sem MAC: {contagem['SEM MAC']}    "
+            + (f'(última verificação: {ultima})' if ultima else '(status ainda não verificado)')
+        )
+        rotulo_status_coletores.config(
+            fg='#15803d' if contagem['ONLINE'] and not contagem['OFF-LINE'] else
+            '#b91c1c' if contagem['OFF-LINE'] else '#475569'
+        )
+        if rede_coletores['conectado']:
+            aviso_coletores_var.set('📶 ' + rede_coletores['mensagem'])
+            rotulo_aviso_coletores.config(bg='#dcfce7', fg='#166534')
+        else:
+            aviso_coletores_var.set('📶 ' + (rede_coletores['mensagem'] or aviso_rede_coletores(config)))
+            rotulo_aviso_coletores.config(bg='#fff7ed', fg='#9a3412')
+
+    def verificar_status_coletores():
+        if not config.get('coletores'):
+            messagebox.showinfo('Coletores', 'Nenhum coletor cadastrado.', parent=root)
+            return
+        botao_verificar.config(state='disabled', text='Verificando...\naguarde')
+        status_var.set('Verificando a rede dos coletores...')
+
+        def concluir(erro=None, atualizados=None, encontrados=0):
+            botao_verificar.config(state='normal', text=TEXTO_BOTAO_VERIFICAR)
+            if erro:
+                atualizar_resumo_coletores()
+                status_var.set(erro)
+                messagebox.showwarning('Rede dos coletores', erro, parent=root)
+                return
+            try:
+                config_atualizada = {**config, 'coletores': validar_lista_coletores(atualizados)}
+                salvar_config(config_atualizada, caminho_config)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror('Não foi possível salvar o status', str(exc), parent=root)
+                return
+            config.update(config_atualizada)
+            atualizar_resumo_coletores()
+            contagem = resumo_status_coletores(config['coletores'])
+            status_var.set(
+                f"Status dos coletores: {contagem['ONLINE']} online, "
+                f"{contagem['OFF-LINE']} offline ({encontrados} aparelho(s) na rede)."
+            )
+            gerar_e_abrir_relatorio_coletores(root)
+
+        def em_segundo_plano():
+            try:
+                conectado, mensagem = conferir_rede_coletores()
+                if not conectado:
+                    root.after(0, lambda: concluir(erro=mensagem))
+                    return
+                macs = macs_na_rede_coletores(config['faixa_rede_coletores'])
+                quando = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                atualizados = aplicar_status_coletores(config['coletores'], macs, quando)
+                root.after(0, lambda: concluir(atualizados=atualizados, encontrados=len(macs)))
+            except Exception as exc:  # noqa: BLE001 - mostra qualquer falha na tela
+                root.after(0, lambda exc=exc: concluir(erro=f'Falha ao verificar: {exc}'))
+
+        threading.Thread(target=em_segundo_plano, daemon=True).start()
+
+    TEXTO_BOTAO_VERIFICAR = 'Verificar status online\nRede Wi-Fi dos coletores'
+    botoes_coletores = tk.Frame(painel_coletores, bg='white')
+    botoes_coletores.grid(row=4, column=0, columnspan=2, sticky='w')
+    for titulo, descricao, cor, cor_ativa, comando in (
+        ('Gerenciar coletores', 'Incluir, editar e remover', '#7c3aed', '#6d28d9',
+         lambda: abrir_coletores()),
+        ('Verificar status online', 'Rede Wi-Fi dos coletores', '#15803d', '#166534',
+         verificar_status_coletores),
+        ('Ver mapa dos coletores', 'Painel por setor', '#0891b2', '#0e7490',
+         lambda: gerar_e_abrir_relatorio_coletores(root)),
+    ):
+        botao = tk.Button(
+            botoes_coletores, text=f'{titulo}\n{descricao}', command=comando,
+            bg=cor, fg='white', activebackground=cor_ativa, activeforeground='white',
+            disabledforeground='#d1fae5',
+            font=('Arial', 11, 'bold'), relief='flat', width=24, height=3,
+            cursor='hand2'
+        )
+        botao.pack(side='left', padx=(0, 12))
+        if comando is verificar_status_coletores:
+            botao_verificar = botao
+
+    telas.update(inicio=tela_inicial, impressoras=area_rolagem, coletores=tela_coletores)
+    mostrar_inicio()
     root.mainloop()
 
 

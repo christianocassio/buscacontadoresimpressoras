@@ -619,6 +619,155 @@ Adaptador Ethernet Ethernet:
             self.assertNotIn('class="botao-mapa"', app.gerar_html([item], "21/11/2026"))
             self.assertIsNone(app.dados_mapa_aps(config, Path(pasta) / "nao.html"))
 
+    def test_coletores_validacao(self):
+        lista = app.validar_lista_coletores([
+            {"setor": " EXPEDIÇÃO ", "fabricante": "zebra", "modelo": "TC52",
+             "numero_serie": " s123 ", "mac": "aa-bb-cc-dd-ee-ff", "piloto": True},
+            {"setor": "RH", "fabricante": "Honeywell", "numero_serie": "H9"},
+        ])
+        self.assertEqual(lista[0]["setor"], "EXPEDIÇÃO")
+        self.assertEqual(lista[0]["fabricante"], "Zebra")
+        self.assertEqual(lista[0]["numero_serie"], "S123")
+        self.assertEqual(lista[0]["mac"], "AA:BB:CC:DD:EE:FF")
+        self.assertTrue(lista[0]["piloto"])
+        self.assertFalse(lista[1]["piloto"])
+        self.assertEqual(lista[1]["versao_app"], "")
+        self.assertEqual(app.validar_lista_coletores(None), [])
+        self.assertEqual(app.validar_lista_coletores([]), [])
+        for invalido, trecho in (
+            ({"fabricante": "Zebra", "numero_serie": "X"}, "setor"),
+            ({"setor": "RH", "fabricante": "Zebra"}, "número de série"),
+            ({"setor": "RH", "fabricante": "Samsung", "numero_serie": "X"}, "Fabricante"),
+            ({"setor": "RH", "fabricante": "Zebra", "numero_serie": "X", "mac": "zz"}, "MAC"),
+        ):
+            with self.assertRaisesRegex(ValueError, trecho):
+                app.validar_lista_coletores([invalido])
+        with self.assertRaisesRegex(ValueError, "mais de uma vez"):
+            app.validar_lista_coletores([
+                {"setor": "RH", "fabricante": "Zebra", "numero_serie": "x1"},
+                {"setor": "CPD", "fabricante": "Zebra", "numero_serie": "X1"},
+            ])
+
+    def test_coletores_supervisor_sugerido_pelo_setor(self):
+        impressoras = [{"setor": "Expedição", "supervisor": "Supervisor A"},
+                       {"setor": "RH", "supervisor": ""}]
+        self.assertEqual(app.supervisor_do_setor("EXPEDIÇÃO ", impressoras), "Supervisor A")
+        self.assertEqual(app.supervisor_do_setor("RH", impressoras), "")
+        self.assertEqual(app.supervisor_do_setor("CPD", impressoras), "")
+
+    def test_setores_e_supervisores_juntam_impressoras_e_coletores(self):
+        impressoras = [{"setor": "EXPEDIÇÃO", "supervisor": "Jose"},
+                       {"setor": "RH", "supervisor": "Cristiane"}]
+        coletores = [{"setor": "expedição", "supervisor": "JOSE"},
+                     {"setor": "DOCA NOVA", "supervisor": "Paulo"},
+                     {"setor": "CPD", "supervisor": ""}]
+        setores, supervisores = app.setores_e_supervisores(impressoras + coletores)
+        self.assertEqual(setores, ["CPD", "DOCA NOVA", "EXPEDIÇÃO", "RH"])
+        self.assertEqual(supervisores, ["Cristiane", "Jose", "Paulo"])
+        # setor criado só nos coletores serve para as impressoras e vice-versa
+        self.assertEqual(app.supervisor_do_setor("Doca Nova", impressoras + coletores), "Paulo")
+        self.assertEqual(app.supervisor_do_setor("rh", coletores + impressoras), "Cristiane")
+
+    def test_escolher_setor_preenche_supervisor(self):
+        try:
+            raiz = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("sem interface gráfica")
+        try:
+            setor, supervisor = app.tk.StringVar(master=raiz), app.tk.StringVar(master=raiz)
+            registros = [{"setor": "RH", "supervisor": "Cristiane"}]
+            app.ligar_setor_ao_supervisor(setor, supervisor, lambda: registros)
+            setor.set("RH")
+            self.assertEqual(supervisor.get(), "Cristiane")
+            setor.set("SETOR NOVO")
+            self.assertEqual(supervisor.get(), "Cristiane")
+        finally:
+            raiz.destroy()
+
+    def test_coletores_relatorio_html_e_csv(self):
+        import csv as modulo_csv
+        import tempfile
+        coletores = app.validar_lista_coletores([
+            {"setor": "RH", "fabricante": "Honeywell", "modelo": "CK65",
+             "numero_serie": "H1", "versao_app": "2.0", "piloto": True},
+            {"setor": "EXPEDIÇÃO", "fabricante": "Zebra", "modelo": "TC52",
+             "numero_serie": "Z1", "versao_app": "1.9", "usuario": "=CMD()"},
+            {"setor": "EXPEDIÇÃO", "fabricante": "Zebra", "numero_serie": "Z2",
+             "versao_app": "1.9", "observacao": "<b>tela</b>"},
+        ])
+        html = app.gerar_html_coletores(coletores, "21/11/2026 12:00:00")
+        soup = app.BeautifulSoup(html, "html.parser")
+        self.assertEqual(soup.title.get_text(), "Coletores CD05")
+        texto = soup.get_text(" ", strip=True)
+        for valor in ("Total de coletores 3", "Zebra 2", "Honeywell 1", "No piloto 1", "Setores 2"):
+            self.assertIn(valor, texto)
+        grupos = [g.get_text(" ", strip=True) for g in soup.select("tr.grupo-setor")]
+        self.assertEqual(grupos, ["EXPEDIÇÃO — 2 coletor(es)", "RH — 1 coletor(es)"])
+        self.assertEqual(len(soup.select("tr.piloto")), 1)
+        self.assertIn("1.9 · 2", texto)
+        self.assertNotIn("<b>tela</b>", html)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = app.salvar_csv_coletores(coletores, Path(pasta) / "c.csv")
+            with open(caminho, encoding="utf-8-sig", newline="") as arquivo:
+                linhas = list(modulo_csv.reader(arquivo))
+        self.assertEqual(linhas[0][:6], ["Status", "Setor físico", "Supervisor", "Fabricante", "Modelo", "Número de série"])
+        self.assertEqual([l[5] for l in linhas[1:]], ["Z1", "Z2", "H1"])
+        self.assertEqual(linhas[1][0], "Não verificado")
+        usuario = linhas[0].index("Usuário")
+        self.assertEqual(linhas[1][usuario], "'=CMD()")
+        self.assertEqual(linhas[3][linhas[0].index("Piloto")], "Sim")
+
+    def test_coletores_status_pelo_mac(self):
+        coletores = app.validar_lista_coletores([
+            {"setor": "RH", "fabricante": "Honeywell", "numero_serie": "H1", "mac": "aa-bb-cc-00-00-01"},
+            {"setor": "RH", "fabricante": "Honeywell", "numero_serie": "H2", "mac": "AA:BB:CC:00:00:02"},
+            {"setor": "RH", "fabricante": "Honeywell", "numero_serie": "H3"},
+        ])
+        self.assertEqual({c["situacao_consultada"] for c in coletores}, {"-"})
+        arp = (
+            "Interface: 10.50.0.10 --- 0x7\n"
+            "  Endereço IP           Endereço físico       Tipo\n"
+            "  10.50.0.21            aa-bb-cc-00-00-01     dinâmico\n"
+            "  10.50.0.255           ff-ff-ff-ff-ff-ff     estático\n"
+            "  224.0.0.22            01-00-5e-00-00-16     estático\n"
+        )
+        macs = app.ler_tabela_arp(arp)
+        self.assertEqual(macs, {"AA:BB:CC:00:00:01": "10.50.0.21"})
+        atualizados = app.validar_lista_coletores(
+            app.aplicar_status_coletores(coletores, macs, "24/11/2026 08:00:00")
+        )
+        self.assertEqual([c["situacao_consultada"] for c in atualizados], ["ONLINE", "OFF-LINE", "SEM MAC"])
+        self.assertEqual(atualizados[0]["ip_atual"], "10.50.0.21")
+        self.assertEqual(atualizados[0]["visto_online_em"], "24/11/2026 08:00:00")
+        self.assertEqual(app.ultima_verificacao_coletores(atualizados), "24/11/2026 08:00:00")
+        html = app.gerar_html_coletores(atualizados, "24/11/2026 08:00:01")
+        soup = app.BeautifulSoup(html, "html.parser")
+        texto = soup.get_text(" ", strip=True)
+        for valor in ("Online 1", "Offline 1", "Sem MAC 1", "Última verificação de status: 24/11/2026 08:00:00"):
+            self.assertIn(valor, texto)
+        self.assertEqual(len(soup.select("span.st-online")), 1)
+        self.assertIsNone(soup.select_one(".aviso"))
+
+    def test_coletores_aviso_rede_wifi(self):
+        config = {"wifi_coletores": "PM-COLETORES", "faixa_rede_coletores": "10.50.0.0/22",
+                  "nome_unidade": "Pague Menos CD05 Contagem-MG"}
+        aviso = app.aviso_rede_coletores(config)
+        self.assertIn('rede Wi-Fi dos coletores "PM-COLETORES"', aviso)
+        self.assertIn("ativo Pague Menos CD05 Contagem-MG", aviso)
+        self.assertEqual(app.situacao_rede_coletores(config, ssids=["CORPORATIVA"], ip_local="10.50.0.9"), (False, aviso))
+        self.assertEqual(app.situacao_rede_coletores(config, ssids=["pm-coletores"], ip_local="10.2.0.9"), (False, aviso))
+        conectado, mensagem = app.situacao_rede_coletores(config, ssids=["PM-COLETORES"], ip_local="10.50.1.9")
+        self.assertTrue(conectado)
+        self.assertIn("10.50.1.9", mensagem)
+        self.assertFalse(app.situacao_rede_coletores({"faixa_rede_coletores": ""})[0])
+        self.assertEqual(app.extrair_ssids(
+            "    SSID                   : PM-COLETORES\n    BSSID                  : aa:bb\n"
+        ), ["PM-COLETORES"])
+        with self.assertRaises(ValueError):
+            app.validar_faixa_coletores("10.0.0.0/16")
+        html = app.gerar_html_coletores([], "24/11/2026 08:00:00", aviso)
+        self.assertIn("PM-COLETORES", app.BeautifulSoup(html, "html.parser").select_one(".aviso").get_text())
+
     def test_mapa_mostra_nivel_de_tinta_e_paginas(self):
         base = {
             "setor": "CPD", "supervisor": "S", "host": "H", "ip": "10.0.0.9",

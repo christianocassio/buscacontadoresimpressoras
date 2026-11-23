@@ -3,6 +3,9 @@
     "whatsapp_padrao": "",
     "limite_tinta": 20,
     "faixa_rede_corporativa": "192.0.2.0/24",
+    "nome_unidade": "Pague Menos CD05 Contagem-MG",
+    "wifi_coletores": "",
+    "faixa_rede_coletores": "",
     "impressoras": [
         {
             "nome": "Impressora 01",
@@ -85,5 +88,6 @@
             "numero_serie": "",
             "tipo_conexao": "CABO"
         }
-    ]
+    ],
+    "coletores": []
 }

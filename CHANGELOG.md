@@ -9,6 +9,17 @@ Padrão das páginas de Release no GitHub:
 
 ---
 
+## v1.0.22 — Gestor de Infraestrutura de TI e módulo Coletores
+**Data:** 23/11/2026
+
+- Tela inicial "Gestor de Infraestrutura de TI" com menu (Sistema, Módulos, Ajuda), caixa Sobre e os módulos Gestão Impressoras, Gestão APs e Gestão Coletores
+- Gestão Impressoras: tela própria com botão "← Início"; a consulta começa ao entrar nesta tela
+- Gestão APs: abre o mapa dos APs embutido
+- Gestão Coletores: cadastro de coletores Zebra/Honeywell (setor, supervisor, modelo, série, versão do app, hostname, MAC Wi-Fi, usuário, piloto) e painel "Clique Aqui Coletores.html" com CSV
+- Status online/offline dos coletores pelo MAC Wi-Fi, com o computador conectado na rede Wi-Fi dos coletores (`wifi_coletores` e `faixa_rede_coletores` no `config.json`), e aviso quando estiver fora dessa rede
+- Painel e lista dos coletores com Online, Offline, Não verificado, Sem MAC, IP atual e "Visto online em"
+- Setor e supervisor em caixa de seleção, compartilhados entre impressoras e coletores
+
 ## v1.0.21 — Plataforma Gerenciamento TI
 **Data:** 21/11/2026
 
